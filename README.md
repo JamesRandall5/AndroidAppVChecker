@@ -1,24 +1,17 @@
-# Android App Checker Render Minimal Test - Programmatic APKMirror Android TV build 1.0.9
+# Android App Checker Render Minimal Test - TV Safe Resolver 1.1.1
 
-This build keeps Google Play for metadata, then programmatically discovers APKMirror Android TV listing pages. It does not use package-specific APKMirror overrides or hard-coded app paths.
+This Render service is the TV-safe resolver build.
 
-The important behaviour is:
+It uses Google Play for metadata only, then tries to discover APKMirror Android TV listings programmatically.
 
-- Google Play `VARY` is never returned as the final version.
-- APKMirror URLs are discovered using title, developer, package name and Android TV search signals.
-- APKMirror candidates are only accepted when the listing/candidate has Android TV signals.
-- Android TV APKMirror candidates outrank generic/mobile fallbacks such as Aptoide JSON.
+Important behaviour:
 
-Health response should show:
+- `VARY` is never returned as the final version.
+- Generic/mobile fallback versions are never selected as final.
+- A final result is returned only when there is Android TV evidence such as `(Android TV)`, `Requires Android TV`, `for Android TV`, or `android-tv` in an APKMirror listing URL/context.
+- If no Android TV-confirmed version is found, the service returns `ok: false` and `version: null` rather than returning a wrong mobile version.
 
-```json
-{
-  "build": "android-tv-programmatic-apkmirror-tv-1.0.9",
-  "provider_build": "google-play-provider-programmatic-apkmirror-tv-1.0.9"
-}
-```
-
-Required files in GitHub:
+GitHub repo files:
 
 ```text
 package.json
@@ -31,4 +24,4 @@ README.md
 providers/google-play.js
 ```
 
-Do not commit `.env`, `node_modules/`, or `.DS_Store`.
+Do not upload `.env`, `node_modules/`, or `.DS_Store`.

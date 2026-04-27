@@ -1,8 +1,8 @@
 {
   "name": "android-app-checker-render-test",
-  "version": "1.0.9",
+  "version": "1.1.1",
   "private": true,
-  "description": "Minimal Render service to look up Android TV app versions with programmatic APKMirror Android TV discovery.",
+  "description": "Minimal Render service to look up confirmed Android TV app versions using Google Play metadata and APKMirror Android TV evidence.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
