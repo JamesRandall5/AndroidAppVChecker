@@ -6,7 +6,7 @@ const sharedSecret = String(process.env.CHECKER_SHARED_SECRET || '').trim();
 const gplayCountry = String(process.env.GPLAY_COUNTRY || 'gb').trim();
 const gplayLanguage = String(process.env.GPLAY_LANGUAGE || 'en').trim();
 const requestTimeoutMs = Number(process.env.REQUEST_TIMEOUT_MS || 30000);
-const buildVersion = 'android-tv-safe-resolver-1.1.1';
+const buildVersion = 'android-tv-apkmirror-url-safe-1.2.0';
 
 if (!sharedSecret) {
   console.error('CHECKER_SHARED_SECRET is required');
@@ -34,29 +34,33 @@ function requireBearer(req, res, next) {
 app.get('/health', (req, res) => {
   res.json({
     ok: true,
-    service: 'android-app-checker-render-test',
-    source: 'Google Play metadata + APKMirror Android TV confirmed versions only',
+    service: 'android-tv-version-checker-render',
     build: buildVersion,
     provider_build: PROVIDER_BUILD,
     country: gplayCountry,
     language: gplayLanguage,
-    behaviour: 'Only confirmed Android TV candidates can be selected. Generic/mobile fallback versions are diagnostic only.',
+    behaviour: 'Production-ready test service. Google Play metadata is collected, but final version must come from the supplied APKMirror Android TV listing URL.',
+    endpoints: {
+      check_one: 'POST /check-one { package_name, apkmirror_tv_url }',
+    },
   });
 });
 
 app.post('/check-one', requireBearer, async (req, res) => {
   try {
     const packageName = String(req.body.package_name || '').trim();
+    const apkMirrorTvUrl = String(req.body.apkmirror_tv_url || '').trim();
+
     if (!packageName) {
       return res.status(400).json({ ok: false, error: 'package_name is required' });
     }
 
-    const result = await provider.lookup(packageName);
+    const result = await provider.lookup({ packageName, apkMirrorTvUrl });
 
-    // Return 200 even when no usable version is found, so the 20i test page can show
-    // the full candidates list instead of only showing a cURL/HTTP error.
+    // Return 200 even for needs_review/needs_source_setup so the 20i page can show the full diagnostics.
     return res.status(200).json({ build: buildVersion, provider_build: PROVIDER_BUILD, ...result });
   } catch (error) {
+    console.error(error);
     return res.status(500).json({
       ok: false,
       build: buildVersion,
@@ -64,6 +68,10 @@ app.post('/check-one', requireBearer, async (req, res) => {
       error: error.message || 'Unknown error',
     });
   }
+});
+
+app.use((req, res) => {
+  res.status(404).json({ ok: false, error: 'Not found' });
 });
 
 app.listen(port, '0.0.0.0', () => {

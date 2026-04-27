@@ -1,7 +1,7 @@
 services:
   - type: web
-    name: android-app-checker-test
-    runtime: node
+    name: android-tv-version-checker
+    env: node
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /health
