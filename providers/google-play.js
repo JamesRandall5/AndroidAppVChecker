@@ -1,9 +1,9 @@
-// ANDROID TV RANKED CANDIDATES BUILD 1.0.6
+// ANDROID TV RANKED CANDIDATES + APKMIRROR BUILD 1.0.7
 // This file collects every public candidate and ranks them instead of returning the first usable result.
 // Important behaviour: Google Play "VARY" is kept as diagnostic data only and is never returned as the final version.
 // If fallback sources disagree, Android-TV/platform relevance wins first, then version number is used as a tie-breaker.
 
-const PROVIDER_BUILD = 'google-play-provider-android-tv-ranked-1.0.6';
+const PROVIDER_BUILD = 'google-play-provider-apkmirror-android-tv-ranked-1.0.7';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 
@@ -11,18 +11,22 @@ const SOURCE_OVERRIDES = {
   'com.crunchyroll.crunchyroid': {
     apkpureSlugs: ['crunchyroll', 'crunchyroll-anime-streaming', 'crunchyroll-everything-anime-android-tv'],
     aptoideNames: ['crunchyroll'],
+    apkmirrorPaths: ['/apk/crunchyroll-llc-2/crunchyroll-everything-anime-android-tv/'],
   },
   'com.spotify.tv.android': {
     apkpureSlugs: ['spotify-for-android-tv-app', 'spotify-music-podcasts', 'spotify'],
     aptoideNames: ['spotify', 'spotify-tv'],
+    apkmirrorPaths: ['/apk/spotify-ab/spotify-music-android-tv/'],
   },
   'com.netflix.ninja': {
     apkpureSlugs: ['netflix', 'netflix-android-tv'],
     aptoideNames: ['netflix'],
+    apkmirrorPaths: ['/apk/netflix-inc/netflix-android-tv/'],
   },
   'com.disney.disneyplus': {
     apkpureSlugs: ['disney', 'disney-plus', 'disney-android-tv'],
     aptoideNames: ['disney'],
+    apkmirrorPaths: ['/apk/disney/disney-android-tv/'],
   },
 };
 
@@ -88,11 +92,18 @@ class AndroidTvVersionProvider {
     // 2) Direct Google Play page parse. Usually also returns VARY, but it proves what the public page exposes.
     await this.safeAddCandidates(candidates, notes, 'google-play-html', () => this.lookupGooglePlayHtml(packageName));
 
-    // 3) Aptoide public JSON endpoints. These are not Google Play, but they often expose a concrete version name.
+    // 3) APKMirror Android TV listing fallback. This is usually the most useful public source
+    // for Android TV when Google Play says VARY. We try direct fetch first, then Jina Reader
+    // and Jina Search as a read/search proxy because APKMirror often blocks simple server fetches.
+    await this.safeAddCandidates(candidates, notes, 'apkmirror-listing', () => this.lookupApkMirrorListing(packageName, playMeta.title));
+    await this.safeAddCandidates(candidates, notes, 'apkmirror-search', () => this.lookupApkMirrorSearch(packageName, playMeta.title));
+
+    // 4) Aptoide public JSON endpoints. These are not Google Play, and for Android TV they can
+    // return stale/generic tracks. They are kept as lower-ranked fallbacks only.
     await this.safeAddCandidates(candidates, notes, 'aptoide-getmeta', () => this.lookupAptoideGetMeta(packageName));
     await this.safeAddCandidates(candidates, notes, 'aptoide-search', () => this.lookupAptoideSearch(packageName));
 
-    // 4) APKPure HTML fallback. This may be blocked from some hosts, but we capture the exact failure as a candidate.
+    // 5) APKPure HTML fallback. This may be blocked from some hosts, but we capture the exact failure as a candidate.
     await this.safeAddCandidates(candidates, notes, 'apkpure-html', () => this.lookupApkPureHtml(packageName, playMeta.title));
 
     // 5) Aptoide public HTML fallback.
@@ -170,6 +181,62 @@ class AndroidTvVersionProvider {
       confidence: this.isUsableVersion(version) ? 0.86 : 0.04,
       note: this.isUsableVersion(version) ? 'Direct Google Play HTML exposed a usable version.' : 'Direct Google Play HTML did not expose a usable version.',
     })];
+  }
+
+  async lookupApkMirrorListing(packageName, title) {
+    const urls = this.apkmirrorUrls(packageName, title);
+    const out = [];
+    for (const baseUrl of urls) {
+      const fetchTargets = [
+        { url: baseUrl, via: 'direct', confidence: 0.98 },
+        { url: `https://r.jina.ai/${baseUrl}`, via: 'jina-reader', confidence: 0.96 },
+      ];
+      for (const target of fetchTargets) {
+        try {
+          const text = await this.fetchText(target.url, {
+            'User-Agent': PLAY_UA,
+            'Accept-Language': `${this.language}-${this.country.toUpperCase()},${this.language};q=0.9`,
+            Accept: 'text/plain,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            Referer: 'https://www.google.com/',
+          });
+          const parsed = this.extractApkMirrorCandidates(text, baseUrl, 'apkmirror-listing', target.confidence, target.via);
+          if (parsed.length) out.push(...parsed);
+          else out.push(this.makeCandidate({
+            source: 'apkmirror-listing',
+            url: target.url,
+            error: `No Android TV release version parsed from APKMirror listing (${target.via}).`,
+          }));
+        } catch (error) {
+          out.push(this.makeCandidate({ source: 'apkmirror-listing', url: target.url, error: error.message || `APKMirror listing fetch failed (${target.via})` }));
+        }
+      }
+    }
+    return out;
+  }
+
+  async lookupApkMirrorSearch(packageName, title) {
+    const displayTitle = String(title || packageName || '').trim();
+    const queries = [
+      `${displayTitle} Android TV APKMirror latest version`,
+      `${packageName} Android TV APKMirror`,
+    ];
+    const out = [];
+    for (const query of queries) {
+      const url = `https://s.jina.ai/${encodeURIComponent(query)}`;
+      try {
+        const text = await this.fetchText(url, {
+          'User-Agent': PLAY_UA,
+          'Accept-Language': `${this.language}-${this.country.toUpperCase()},${this.language};q=0.9`,
+          Accept: 'text/plain,*/*;q=0.8',
+        });
+        const parsed = this.extractApkMirrorCandidates(text, url, 'apkmirror-search', 0.94, 'jina-search');
+        if (parsed.length) out.push(...parsed);
+        else out.push(this.makeCandidate({ source: 'apkmirror-search', url, error: 'No Android TV APKMirror release version parsed from search output.' }));
+      } catch (error) {
+        out.push(this.makeCandidate({ source: 'apkmirror-search', url, error: error.message || 'APKMirror search fetch failed' }));
+      }
+    }
+    return out;
   }
 
   async lookupAptoideGetMeta(packageName) {
@@ -370,6 +437,9 @@ class AndroidTvVersionProvider {
     // Source priority for Android TV mode. HTML/app pages and explicit TV URLs are more
     // useful than Aptoide JSON because JSON can return a generic/stale package track.
     if (source === 'google-play-scraper') score += 100;
+    else if (source === 'apkmirror-listing' && hasTvSignal) score += 118;
+    else if (source === 'apkmirror-search' && hasTvSignal) score += 112;
+    else if (source === 'apkmirror-listing' || source === 'apkmirror-search') score += 92;
     else if (source === 'apkpure-html' && hasTvSignal) score += 96;
     else if (source === 'apkpure-html') score += 66;
     else if (source === 'aptoide-html') score += 86;
@@ -405,6 +475,75 @@ class AndroidTvVersionProvider {
   buildSummary(candidates, notes) {
     const candidateNotes = candidates.slice(0, 20).map(c => `${c.source}: ${c.version || 'none'}${c.note ? ` (${c.note})` : ''}`);
     return [...notes, ...candidateNotes].filter(Boolean).join(' | ');
+  }
+
+  extractApkMirrorCandidates(text, sourceUrl, source, confidence, via) {
+    const decoded = this.decode(text);
+    const out = [];
+    const seen = new Set();
+    const patterns = [
+      {
+        regex: /(?:^|\n)\s*(?:#{1,6}\s*)?([^\n]{0,180}?\(Android TV\)[^\n]{0,180}?\b([0-9]+(?:[._-][0-9]+){1,6})(?:\s+build\s+([0-9]{2,}))?[^\n]*)/gi,
+        wholeGroup: 1,
+        versionGroup: 2,
+        buildGroup: 3,
+      },
+      {
+        regex: /Download\s+([^\n]{0,140}?\(Android TV\)[^\n]{0,140}?\b([0-9]+(?:[._-][0-9]+){1,6})(?:\s+build\s+([0-9]{2,}))?[^\n]*)/gi,
+        wholeGroup: 1,
+        versionGroup: 2,
+        buildGroup: 3,
+      },
+      {
+        regex: /Version\s*:\s*([0-9]+(?:[._-][0-9]+){1,6})(?:\s+build\s+([0-9]{2,}))?/gi,
+        wholeGroup: 0,
+        versionGroup: 1,
+        buildGroup: 2,
+      },
+    ];
+    for (const item of patterns) {
+      let match;
+      while ((match = item.regex.exec(decoded)) !== null) {
+        const whole = String(match[item.wholeGroup] || match[0] || '');
+        const version = this.cleanVersion(match[item.versionGroup] || '');
+        const versionCode = match[item.buildGroup] || this.extractFirst(whole, [/\(([0-9]{3,})\)\s+for\s+Android/i, /build\s+([0-9]{2,})/i]);
+        if (!this.isUsableVersion(version)) continue;
+        // Search output can contain nearby non-TV results, so require an Android TV signal unless it came from a known APKMirror TV listing URL.
+        const tvSignal = /android\s*tv/i.test(whole + ' ' + sourceUrl) || /netflix-android-tv|android-tv/i.test(sourceUrl);
+        if (!tvSignal) continue;
+        const key = `${source}:${version}:${versionCode || ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(this.makeCandidate({
+          source,
+          version,
+          version_code: versionCode || '',
+          updated: this.extractDateNear(decoded, match.index),
+          url: sourceUrl,
+          confidence,
+          note: `APKMirror Android TV release parsed via ${via}.`,
+        }));
+      }
+    }
+    return out;
+  }
+
+  extractDateNear(text, index) {
+    const start = Math.max(0, Number(index || 0) - 160);
+    const end = Math.min(String(text || '').length, Number(index || 0) + 260);
+    const windowText = String(text || '').slice(start, end);
+    return this.extractFirst(windowText, [/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+20\d{2}/i, /20\d{2}-\d{2}-\d{2}/i]);
+  }
+
+  apkmirrorUrls(packageName, title) {
+    const override = SOURCE_OVERRIDES[packageName] || {};
+    const paths = new Set(override.apkmirrorPaths || []);
+    const urls = [];
+    for (const path of paths) {
+      const cleanPath = String(path || '').startsWith('/') ? String(path || '') : `/${path}`;
+      urls.push(`https://www.apkmirror.com${cleanPath}`);
+    }
+    return Array.from(new Set(urls));
   }
 
   apkpureUrls(packageName, title) {

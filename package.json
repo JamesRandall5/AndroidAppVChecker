@@ -1,6 +1,6 @@
 {
   "name": "android-app-checker-render-test",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "description": "Minimal Render service to look up Android TV app versions with Android TV Android TV ranked fallback candidate diagnostics.",
   "main": "server.js",
