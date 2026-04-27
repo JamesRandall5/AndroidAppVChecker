@@ -6,6 +6,7 @@ const sharedSecret = String(process.env.CHECKER_SHARED_SECRET || '').trim();
 const gplayCountry = String(process.env.GPLAY_COUNTRY || 'gb').trim();
 const gplayLanguage = String(process.env.GPLAY_LANGUAGE || 'en').trim();
 const requestTimeoutMs = Number(process.env.REQUEST_TIMEOUT_MS || 30000);
+const buildVersion = 'android-tv-vary-fallback-1.0.2';
 
 if (!sharedSecret) {
   console.error('CHECKER_SHARED_SECRET is required');
@@ -34,7 +35,8 @@ app.get('/health', (req, res) => {
   res.json({
     ok: true,
     service: 'android-app-checker-render-test',
-    source: 'Google Play',
+    source: 'Google Play + Android TV fallback',
+    build: buildVersion,
     country: gplayCountry,
     language: gplayLanguage,
   });
@@ -48,7 +50,7 @@ app.post('/check-one', requireBearer, async (req, res) => {
     }
 
     const result = await provider.lookup(packageName);
-    return res.status(result.ok ? 200 : 502).json(result);
+    return res.status(result.ok ? 200 : 502).json({ build: buildVersion, ...result });
   } catch (error) {
     return res.status(500).json({
       ok: false,

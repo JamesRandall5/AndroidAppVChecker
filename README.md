@@ -33,3 +33,17 @@ Fallback order:
 4. Aptoide fallback.
 
 For the Crunchyroll TV package, the service should now try APKPure TV pages after Google Play returns VARY.
+
+## Files that must change from the previous build
+
+If GitHub only shows README.md as changed, the code file was not replaced. The key file is:
+
+- `providers/google-play.js`
+
+You should also see these files changed in this build:
+
+- `server.js` - adds `build: android-tv-vary-fallback-1.0.2` to `/health` and `/check-one` responses.
+- `package.json` - bumps the test service version to `1.0.2`.
+- `.gitignore` - prevents `.env` and `node_modules` being committed.
+
+Do not upload a real `.env` file to GitHub. Use Render Environment Variables instead.
