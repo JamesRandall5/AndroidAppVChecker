@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-url-variant-tv-safe-1.3.2';
+const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-exact-url-tv-safe-1.3.3';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -63,11 +63,11 @@ class AndroidTvVersionProvider {
         version_code: winner.version_code || '',
         google_play_version: candidates.find(c => c.source === 'google-play-scraper')?.version || null,
         source: winner.source,
-        source_url: winner.url || normalised.listing_url,
-        apk_mirror_tv_url: normalised.listing_url,
+        source_url: winner.url || normalised.source_url,
+        apk_mirror_tv_url: normalised.source_url,
         confidence: winner.confidence,
         tv_evidence: winner.tv_evidence,
-        selected_reason: 'Selected highest confirmed Android TV version from supplied APKMirror listing URL.',
+        selected_reason: 'Selected highest confirmed Android TV version from the exact APKMirror source URL supplied by 20i.' ,
         warning: this.summary(candidates.filter(c => c !== winner), notes),
         candidates,
       };
@@ -79,106 +79,40 @@ class AndroidTvVersionProvider {
       notes,
       'needs_review',
       'No confirmed Android TV version could be parsed from the supplied APKMirror TV URL. Generic/mobile versions were not selected.',
-      normalised.listing_url
+      normalised.source_url
     );
   }
 
   async lookupApkMirrorUrl(normalised, meta = {}) {
+    // Production-safe behaviour: only fetch the exact APKMirror source URL supplied by 20i.
+    // This may be the normal Android TV listing, a variant/filter page, or a specific release page.
+    // We intentionally do not crawl/search APKMirror here; broad discovery caused timeouts and can drift onto mobile results.
+    const sourceUrl = normalised.source_url;
+    const targets = [
+      { method: 'direct-exact-url', url: sourceUrl, confidence: 0.99, kind: 'html' },
+      { method: 'jina-reader-exact-url', url: `https://r.jina.ai/${sourceUrl}`, confidence: 0.97, kind: 'reader' },
+    ];
     const out = [];
-    const targets = [];
-    const queued = new Set();
-    const maxTargets = 10;
 
-    const addTarget = (target) => {
-      if (!target || !target.url || queued.has(target.url) || targets.length >= maxTargets) return;
-      queued.add(target.url);
-      targets.push(target);
-    };
-
-    addTarget({ method: 'direct', url: normalised.listing_url, confidence: 0.98, kind: 'html' });
-    addTarget({ method: 'jina-reader', url: 'https://r.jina.ai/' + normalised.listing_url, confidence: 0.96, kind: 'reader' });
-
-    // APKMirror sometimes exposes the newest Android TV release only on filtered
-    // variant pages, for example /variant-{"minapi_slug":"minapi-23"}/.
-    // Build a small, bounded set of common Android TV min-api filters instead of
-    // broad web discovery, so one app check cannot become a crawler.
-    for (const variantUrl of this.commonApkMirrorVariantUrls(normalised)) {
-      addTarget({
-        method: 'jina-variant-' + this.variantLabel(variantUrl),
-        url: 'https://r.jina.ai/' + variantUrl,
-        confidence: 0.95,
-        kind: 'variant-reader',
-      });
-    }
-
-    for (let index = 0; index < targets.length && index < maxTargets; index += 1) {
-      const target = targets[index];
+    for (const target of targets) {
       try {
         const text = await this.fetchText(target.url, {
           'User-Agent': PLAY_UA,
-          'Accept-Language': this.language + '-' + this.country.toUpperCase() + ',' + this.language + ';q=0.9',
-          Accept: target.kind === 'reader' || target.kind === 'variant-reader'
+          'Accept-Language': `${this.language}-${this.country.toUpperCase()},${this.language};q=0.9`,
+          Accept: target.kind === 'reader'
             ? 'text/plain,*/*;q=0.8'
             : 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain,*/*;q=0.8',
           Referer: 'https://www.google.com/',
         });
-
-        // If the base page exposes extra variant-filter URLs, enqueue a few of
-        // them. This remains tied to the supplied APKMirror Android TV listing and
-        // does not use generic/mobile source discovery.
-        for (const discoveredVariantUrl of this.extractVariantUrls(text, normalised).slice(0, 4)) {
-          addTarget({
-            method: 'jina-discovered-variant-' + this.variantLabel(discoveredVariantUrl),
-            url: 'https://r.jina.ai/' + discoveredVariantUrl,
-            confidence: 0.95,
-            kind: 'variant-reader',
-          });
-        }
-
         const parsed = this.extractTvCandidates(text, normalised, target);
         if (parsed.length) out.push(...parsed);
-        else out.push(this.candidate({ source: 'apkmirror-tv-url', url: target.url, error: target.method + ': fetched but no TV release version parsed' }));
+        else out.push(this.candidate({ source: 'apkmirror-tv-url', url: target.url, error: `${target.method}: fetched but no TV release version parsed` }));
       } catch (error) {
-        out.push(this.candidate({ source: 'apkmirror-tv-url', url: target.url, error: target.method + ': ' + (error.message || 'fetch failed') }));
+        out.push(this.candidate({ source: 'apkmirror-tv-url', url: target.url, error: `${target.method}: ${error.message || 'fetch failed'}` }));
       }
     }
 
     return out;
-  }
-
-  commonApkMirrorVariantUrls(normalised) {
-    const base = normalised.listing_url.replace(/\/+$/, '/');
-    const minApiSlugs = ['minapi-21', 'minapi-23', 'minapi-24', 'minapi-26', 'minapi-28'];
-    return minApiSlugs.map((slug) => {
-      const json = encodeURIComponent(JSON.stringify({ minapi_slug: slug }));
-      return base + 'variant-' + json + '/';
-    });
-  }
-
-  variantLabel(url) {
-    const decoded = decodeURIComponent(String(url || ''));
-    const match = decoded.match(/minapi[-_]slug["']?\s*[:=]\s*["']?(minapi-\d+)/i) || decoded.match(/minapi-(\d+)/i);
-    if (!match) return 'filtered';
-    const value = String(match[1]).startsWith('minapi-') ? String(match[1]) : 'minapi-' + match[1];
-    return value.replace(/[^a-z0-9-]+/gi, '-').toLowerCase();
-  }
-
-  extractVariantUrls(text, normalised) {
-    const out = [];
-    const base = new URL(normalised.listing_url);
-    const basePath = base.pathname.replace(/\/+$/, '') + '/';
-    const pattern = /(?:href=["']([^"']*variant-[^"']+)["']|(https?:\/\/www\.apkmirror\.com\/apk\/[^\s"'<>\)]+variant-[^\s"'<>\)]+))/gi;
-    let match;
-    while ((match = pattern.exec(String(text || '')))) {
-      const raw = this.decodeHtml(match[1] || match[2] || '');
-      let absolute;
-      try { absolute = new URL(raw, normalised.listing_url); } catch (_) { continue; }
-      if (!APKMIRROR_HOST_RE.test(absolute.hostname)) continue;
-      if (!absolute.pathname.startsWith(basePath)) continue;
-      if (!/variant-/i.test(absolute.pathname)) continue;
-      out.push(absolute.origin + absolute.pathname.replace(/\/+$/, '/'));
-    }
-    return this.uniqueBy(out, v => v);
   }
 
   buildApkMirrorSearchQueries(normalised, meta = {}) {
@@ -195,7 +129,7 @@ class AndroidTvVersionProvider {
   extractTvCandidates(text, normalised, target) {
     const body = String(text || '');
     const plain = this.toPlainText(body);
-    const listingHasTvHint = /android[-\s]*tv/i.test(normalised.listing_url) || /android[-\s]*tv/i.test(normalised.app_slug);
+    const listingHasTvHint = Boolean(normalised.source_has_tv_hint) || /android[-\s]*tv/i.test(normalised.listing_url) || /android[-\s]*tv/i.test(normalised.app_slug);
     const out = [];
     const seen = new Set();
     let urlCandidateCount = 0;
@@ -300,6 +234,34 @@ class AndroidTvVersionProvider {
       }
     }
 
+    // If 20i supplies an exact APKMirror variant/filter or release page under an Android TV app slug,
+    // allow standalone "Version: 1.2.3(123)" lines from that exact page. This is needed where
+    // the app title and version are separated in reader text. It is deliberately not enabled for
+    // broad discovery/search because that can drift onto related mobile versions.
+    if (listingHasTvHint && (normalised.is_variant_url || normalised.is_release_url)) {
+      for (let i = 0; i < lines.length; i += 1) {
+        const chunk = lines.slice(Math.max(0, i - 1), Math.min(lines.length, i + 4)).join(' ');
+        if (!/\bVersion\b|\bAPK\b|\bBuild\b|\bAndroid\b/i.test(chunk)) continue;
+        const info = this.versionFromGenericLine(chunk, normalised.app_slug);
+        if (!this.isUsableVersion(info.version)) continue;
+        const key = `${info.version}:${info.version_code || ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(this.candidate({
+          source: 'apkmirror-tv-url',
+          version: info.version,
+          version_code: info.version_code || '',
+          updated: this.updatedFromText(chunk),
+          url: target.url,
+          usable: true,
+          tv_confirmed: true,
+          confidence: Math.min(target.confidence, 0.95),
+          tv_evidence: 'Exact supplied APKMirror URL is an Android TV variant/release source and contained a standalone version line.',
+          note: `Parsed exact APKMirror variant/release page via ${target.method}.`,
+        }));
+      }
+    }
+
     return this.uniqueBy(out, c => `${c.source}:${c.version}:${c.version_code}:${c.url}`);
   }
 
@@ -327,7 +289,7 @@ class AndroidTvVersionProvider {
 
   normaliseApkMirrorListingUrl(input) {
     const raw = String(input || '').trim();
-    if (!raw) throw new Error('APKMirror Android TV listing URL is required for TV-safe checking.');
+    if (!raw) throw new Error('APKMirror Android TV source URL is required for TV-safe checking.');
     let url;
     try { url = new URL(raw); } catch (_) { throw new Error('APKMirror TV URL is not a valid URL.'); }
     if (!APKMIRROR_HOST_RE.test(url.hostname)) throw new Error('APKMirror TV URL must be on apkmirror.com.');
@@ -335,11 +297,19 @@ class AndroidTvVersionProvider {
     if (parts.length < 3 || parts[0] !== 'apk') throw new Error('APKMirror TV URL must be under /apk/{developer}/{app}/.');
     const developerSlug = parts[1];
     const appSlug = parts[2];
+    const baseListingUrl = `https://www.apkmirror.com/apk/${developerSlug}/${appSlug}/`;
+    const cleanPath = `/${parts.join('/')}/`;
+    const sourceUrl = `https://www.apkmirror.com${cleanPath}${url.search || ''}`;
+    const lowerSource = sourceUrl.toLowerCase();
     return {
-      listing_url: `https://www.apkmirror.com/apk/${developerSlug}/${appSlug}/`,
+      listing_url: baseListingUrl,
+      source_url: sourceUrl,
       developer_slug: developerSlug,
       app_slug: appSlug,
       original_url: raw,
+      is_variant_url: /\/variant-/i.test(url.pathname) || /variant/i.test(url.search),
+      is_release_url: parts.length >= 4 && !/^variant-/i.test(parts[3]),
+      source_has_tv_hint: /android[-\s]*tv/i.test(lowerSource) || /android[-\s]*tv/i.test(appSlug),
     };
   }
 

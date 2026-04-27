@@ -5,7 +5,7 @@ This is the production Render checker used by the 20i dashboard.
 It is intentionally **TV-safe**:
 
 - Google Play is used for metadata only.
-- The final version must come from the APKMirror Android TV listing URL supplied by the 20i app record.
+- The final version must come from the APKMirror Android TV source URL supplied by the 20i app record.
 - If the supplied URL cannot be fetched or parsed as Android TV, the service returns `ok: false` and `version: null` rather than returning a generic/mobile version.
 
 ## Files for GitHub
@@ -72,8 +72,11 @@ Body:
 The 20i dashboard calls this endpoint for one app at a time when running all checks.
 
 
-## 1.3.2
+## 1.3.3
 Improves APKMirror Android TV parsing when direct APKMirror access is blocked. Adds Jina Search fallback parsing, fixes Google Play `VARY` cleaning, and preserves the TV-safe rule: generic/mobile versions are never selected as final.
 
-## 1.3.2 variant-page update
-This build keeps the TV-safe rule but also checks a bounded set of APKMirror Android TV variant pages, such as `variant-{"minapi_slug":"minapi-23"}`. This is needed for apps where APKMirror exposes the newest Android TV release inside a filtered variant page instead of the base listing text.
+## Exact APKMirror source URLs
+
+This build checks only the exact APKMirror URL supplied by 20i. The URL can be the normal Android TV listing page, a variant/filter page, or a specific release page. It does not crawl broad variant/search pages, so it should return quickly and avoid drifting onto mobile versions.
+
+For apps where the normal listing page does not expose the latest version to Render, paste the APKMirror variant/filter URL that shows the latest Android TV version into the 20i APKMirror URL field.
