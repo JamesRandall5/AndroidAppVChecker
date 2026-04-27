@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-exact-url-tv-safe-1.3.4';
+const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-exact-url-tv-safe-1.3.5';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -390,6 +390,31 @@ class AndroidTvVersionProvider {
     return usable[0] || null;
   }
 
+
+  async safeAdd(candidates, notes, label, fn) {
+    try {
+      const result = await fn();
+      if (Array.isArray(result)) candidates.push(...result);
+      else if (result) candidates.push(this.candidate({ source: label, ...result }));
+    } catch (error) {
+      const message = error?.name === 'AbortError' ? 'request timed out' : (error?.message || 'Unknown error');
+      notes.push(` failed: `);
+      candidates.push(this.candidate({ source: label, error: message }));
+    }
+  }
+
+  async fetchText(url, headers = {}) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await fetch(url, { headers, signal: controller.signal, redirect: 'follow' });
+      const text = await response.text();
+      if (!response.ok) throw new Error(`HTTP `);
+      return text;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   candidate(input) {
     const version = this.cleanVersion(input.version || '');
