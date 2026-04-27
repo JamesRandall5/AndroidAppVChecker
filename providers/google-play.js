@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-url-tv-safe-1.3.0';
+const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-url-tv-safe-1.3.1';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -51,7 +51,7 @@ class AndroidTvVersionProvider {
       return this.failure(meta, candidates, notes, 'needs_source_setup', error.message || 'APKMirror Android TV URL required.', '');
     }
 
-    await this.safeAdd(candidates, notes, 'apkmirror-tv-url', () => this.lookupApkMirrorUrl(normalised));
+    await this.safeAdd(candidates, notes, 'apkmirror-tv-url', () => this.lookupApkMirrorUrl(normalised, meta));
 
     const winner = this.pickBestTvCandidate(candidates);
     if (winner) {
@@ -83,10 +83,17 @@ class AndroidTvVersionProvider {
     );
   }
 
-  async lookupApkMirrorUrl(normalised) {
+  async lookupApkMirrorUrl(normalised, meta = {}) {
+    const searchQueries = this.buildApkMirrorSearchQueries(normalised, meta);
     const targets = [
-      { method: 'direct', url: normalised.listing_url, confidence: 0.98 },
-      { method: 'jina-reader', url: `https://r.jina.ai/${normalised.listing_url}`, confidence: 0.96 },
+      { method: 'direct', url: normalised.listing_url, confidence: 0.98, kind: 'html' },
+      { method: 'jina-reader', url: `https://r.jina.ai/${normalised.listing_url}`, confidence: 0.96, kind: 'reader' },
+      ...searchQueries.map((query, index) => ({
+        method: `jina-search-${index + 1}`,
+        url: `https://s.jina.ai/${encodeURIComponent(query)}`,
+        confidence: 0.94 - (index * 0.02),
+        kind: 'search',
+      })),
     ];
     const out = [];
 
@@ -95,7 +102,7 @@ class AndroidTvVersionProvider {
         const text = await this.fetchText(target.url, {
           'User-Agent': PLAY_UA,
           'Accept-Language': `${this.language}-${this.country.toUpperCase()},${this.language};q=0.9`,
-          Accept: target.method === 'jina-reader'
+          Accept: target.kind === 'reader' || target.kind === 'search'
             ? 'text/plain,*/*;q=0.8'
             : 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain,*/*;q=0.8',
           Referer: 'https://www.google.com/',
@@ -109,6 +116,17 @@ class AndroidTvVersionProvider {
     }
 
     return out;
+  }
+
+  buildApkMirrorSearchQueries(normalised, meta = {}) {
+    const title = String(meta.title || '').replace(/[:|]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const slugWords = String(normalised.app_slug || '').replace(/-/g, ' ').trim();
+    const path = `site:apkmirror.com/apk/${normalised.developer_slug}/${normalised.app_slug}`;
+    const queries = [];
+    if (title) queries.push(`${path} "Android TV" "${title}" "Version"`);
+    queries.push(`${path} "Android TV" "Version"`);
+    queries.push(`site:apkmirror.com ${slugWords} "Android TV" "Version"`);
+    return [...new Set(queries)].slice(0, 3);
   }
 
   extractTvCandidates(text, normalised, target) {
@@ -144,6 +162,34 @@ class AndroidTvVersionProvider {
     }
 
     const lines = plain.split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+
+    // Reader/search fallbacks often split the app title and Version line.
+    // Use a small context window so confirmed Android TV snippets are still parsed,
+    // while generic/mobile-only snippets remain rejected.
+    for (let i = 0; i < lines.length; i += 1) {
+      const chunk = lines.slice(Math.max(0, i - 2), Math.min(lines.length, i + 6)).join(' ');
+      if (!/\bAndroid\s*TV\b|\(Android\s*TV\)|android[-\s]*tv/i.test(chunk)) continue;
+      if (!this.lineBelongsToListing(chunk, normalised.app_slug)) continue;
+      const info = this.versionFromAndroidTvLine(chunk);
+      const finalInfo = this.isUsableVersion(info.version) ? info : this.versionFromGenericLine(chunk, normalised.app_slug);
+      if (!this.isUsableVersion(finalInfo.version)) continue;
+      const key = `${finalInfo.version}:${finalInfo.version_code || ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(this.candidate({
+        source: 'apkmirror-tv-url',
+        version: finalInfo.version,
+        version_code: finalInfo.version_code || '',
+        updated: this.updatedFromText(chunk),
+        url: target.url,
+        usable: true,
+        tv_confirmed: true,
+        confidence: Math.min(target.confidence, target.kind === 'search' ? 0.92 : 0.94),
+        tv_evidence: `Reader/search text contains Android TV and belongs to supplied APKMirror listing (${target.method}).`,
+        note: `Parsed Android TV search/reader text via ${target.method}.`,
+      }));
+    }
+
     for (const line of lines) {
       if (!/\bAndroid\s*TV\b|\(Android\s*TV\)|android[-\s]*tv/i.test(line)) continue;
       if (!this.lineBelongsToListing(line, normalised.app_slug)) continue;
@@ -248,13 +294,14 @@ class AndroidTvVersionProvider {
   versionFromAndroidTvLine(line) {
     const text = String(line || '').replace(/\s+/g, ' ');
     const patterns = [
-      /\(\s*Android\s*TV\s*\)\s*(?:version\s*)?([0-9]+(?:\.[0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:\s+build\s+([0-9]+))?/i,
-      /Android\s*TV[^0-9]{0,80}([0-9]+(?:\.[0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:\s+build\s+([0-9]+))?/i,
-      /android-tv[^0-9]{0,80}([0-9]+(?:[-.][0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:[-\s]+build[-\s]+([0-9]+))?/i,
+      /\(\s*Android\s*TV\s*\)[^0-9]{0,220}(?:version\s*:?\s*)?([0-9]+(?:\.[0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:\s*\((\d+)\)|\s+build\s+([0-9]+))?/i,
+      /Android\s*TV[^0-9]{0,220}(?:version\s*:?\s*)?([0-9]+(?:\.[0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:\s*\((\d+)\)|\s+build\s+([0-9]+))?/i,
+      /android-tv[^0-9]{0,220}(?:version\s*:?\s*)?([0-9]+(?:[-.][0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:[-\s]+build[-\s]+([0-9]+)|\s*\((\d+)\))?/i,
+      /Version\s*:?\s*([0-9]+(?:\.[0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)\s*\((\d+)\).*Android\s*TV/i,
     ];
     for (const pattern of patterns) {
       const match = text.match(pattern);
-      if (match) return { version: this.cleanVersion(match[1]), version_code: match[2] || '' };
+      if (match) return { version: this.cleanVersion(match[1]), version_code: match[2] || match[3] || '' };
     }
     return { version: '', version_code: '' };
   }
@@ -262,8 +309,9 @@ class AndroidTvVersionProvider {
   versionFromGenericLine(line, listingSlug) {
     const fromSlug = this.versionFromReleaseSlug(this.slugify(line), listingSlug);
     if (this.isUsableVersion(fromSlug.version)) return fromSlug;
-    const match = String(line || '').match(/(?:version\s*)?([0-9]+(?:\.[0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:\s+build\s+([0-9]+))?/i);
-    return { version: match ? this.cleanVersion(match[1]) : '', version_code: match?.[2] || '' };
+    const text = String(line || '').replace(/\s+/g, ' ');
+    const match = text.match(/(?:version\s*:?\s*)?([0-9]+(?:\.[0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:\s*\((\d+)\)|\s+build\s+([0-9]+))?/i);
+    return { version: match ? this.cleanVersion(match[1]) : '', version_code: match?.[2] || match?.[3] || '' };
   }
 
   lineBelongsToListing(line, listingSlug) {
@@ -354,9 +402,15 @@ class AndroidTvVersionProvider {
   }
 
   cleanVersion(value) {
-    let version = String(value || '').trim();
-    version = this.decodeHtml(version).replace(/^v(?:ersion)?\s*/i, '').trim().replace(/[\s,;]+$/g, '').replace(/_/g, '-');
-    if (/^(vary|varies with device|depends on device|unknown|n\/a)$/i.test(version)) return version.toUpperCase() === 'VARY' ? 'VARY' : '';
+    let version = this.decodeHtml(String(value || '').trim()).replace(/[\s,;]+$/g, '').replace(/_/g, '-');
+    if (/^(vary|varies with device|depends on device|unknown|n\/a)$/i.test(version)) {
+      return /^vary$/i.test(version) ? 'VARY' : '';
+    }
+    // Only strip a leading v when it is a semantic-version prefix, not from words like VARY.
+    version = version.replace(/^version\s*:?\s*/i, '').replace(/^v(?=\d)/i, '').trim();
+    if (/^(vary|varies with device|depends on device|unknown|n\/a)$/i.test(version)) {
+      return /^vary$/i.test(version) ? 'VARY' : '';
+    }
     return version;
   }
 

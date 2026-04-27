@@ -70,3 +70,7 @@ Body:
 ```
 
 The 20i dashboard calls this endpoint for one app at a time when running all checks.
+
+
+## 1.3.1
+Improves APKMirror Android TV parsing when direct APKMirror access is blocked. Adds Jina Search fallback parsing, fixes Google Play `VARY` cleaning, and preserves the TV-safe rule: generic/mobile versions are never selected as final.
