@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-exact-url-tv-safe-1.3.3';
+const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-exact-url-tv-safe-1.3.4';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -340,12 +340,26 @@ class AndroidTvVersionProvider {
   }
 
   versionFromGenericLine(line, listingSlug) {
-    const fromSlug = this.versionFromReleaseSlug(this.slugify(line), listingSlug);
-    if (this.isUsableVersion(fromSlug.version)) return fromSlug;
-    const text = String(line || '').replace(/\s+/g, ' ');
-    const match = text.match(/(?:version\s*:?\s*)?([0-9]+(?:\.[0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:\s*\((\d+)\)|\s+build\s+([0-9]+))?/i);
-    return { version: match ? this.cleanVersion(match[1]) : '', version_code: match?.[2] || match?.[3] || '' };
+    const text = String(line || '').replace(/\s+/g, ' ').trim();
+
+    // Never parse image filenames, icon dimensions, dates, or arbitrary page numbers as versions.
+    if (/\.(?:png|jpg|jpeg|webp|gif|svg)\b/i.test(text)) return { version: '', version_code: '' };
+    if (/\b(?:Image|File size|Downloads|Uploaded|Published|Updated|width|height|dpi|icon|premium)\b/i.test(text) && !/\bVersion\b/i.test(text)) {
+      return { version: '', version_code: '' };
+    }
+
+    // APKMirror's reliable form is "Version:3.3.10(12345)".
+    const explicit = text.match(/\bVersion\s*:?\s*([0-9]+(?:\.[0-9]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:\s*\((\d{2,})\)|\s+build\s+(\d{2,}))?/i);
+    if (explicit) return { version: this.cleanVersion(explicit[1]), version_code: explicit[2] || explicit[3] || '' };
+
+    // Or a release title where Android TV is adjacent to the version.
+    const tvTitle = text.match(/\bAndroid\s*TV\b[^0-9]{0,160}([0-9]+(?:\.[0-9]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:\s*\((\d{2,})\)|\s+build\s+(\d{2,}))?/i)
+      || text.match(/\(\s*Android\s*TV\s*\)[^0-9]{0,160}([0-9]+(?:\.[0-9]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:\s*\((\d{2,})\)|\s+build\s+(\d{2,}))?/i);
+    if (tvTitle) return { version: this.cleanVersion(tvTitle[1]), version_code: tvTitle[2] || tvTitle[3] || '' };
+
+    return { version: '', version_code: '' };
   }
+
 
   lineBelongsToListing(line, listingSlug) {
     const source = String(line || '').toLowerCase();
@@ -364,38 +378,18 @@ class AndroidTvVersionProvider {
     const usable = candidates
       .filter(c => c && c.usable && c.tv_confirmed && this.isUsableVersion(c.version))
       .sort((a, b) => {
+        // Trust source quality first. APKMirror release URLs are more reliable than broad reader text.
+        const confidenceCompare = Number(b.confidence || 0) - Number(a.confidence || 0);
+        if (Math.abs(confidenceCompare) > 0.001) return confidenceCompare;
         const versionCompare = this.compareVersions(b.version, a.version);
         if (versionCompare !== 0) return versionCompare;
         const buildCompare = Number(b.version_code || 0) - Number(a.version_code || 0);
         if (buildCompare !== 0) return buildCompare;
-        return Number(b.confidence || 0) - Number(a.confidence || 0);
+        return 0;
       });
     return usable[0] || null;
   }
 
-  async safeAdd(candidates, notes, label, fn) {
-    try {
-      const result = await fn();
-      if (Array.isArray(result)) candidates.push(...result);
-      else if (result) candidates.push(this.candidate({ source: label, ...result }));
-    } catch (error) {
-      notes.push(`${label} failed: ${error.message || 'Unknown error'}`);
-      candidates.push(this.candidate({ source: label, error: error.message || 'Unknown error' }));
-    }
-  }
-
-  async fetchText(url, headers = {}) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    try {
-      const response = await fetch(url, { headers, signal: controller.signal, redirect: 'follow' });
-      const text = await response.text();
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return text;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
 
   candidate(input) {
     const version = this.cleanVersion(input.version || '');
@@ -449,8 +443,23 @@ class AndroidTvVersionProvider {
 
   isUsableVersion(value) {
     const version = this.cleanVersion(value);
-    return /^[0-9]+(?:\.[0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?$/.test(version);
+
+    // App versions should be numeric semantic-ish values. Do not accept 57.png, 2.png,
+    // icon sizes, dates such as 11.2026, or arbitrary file/page numbers.
+    if (!/^[0-9]+(?:\.[0-9]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?$/i.test(version)) return false;
+
+    const parts = version.split(/[-_]/, 1)[0].split('.').map(v => Number.parseInt(v, 10));
+    if (parts.length < 2) return false;
+
+    // Reject obvious date fragments exposed by reader text, e.g. 11.2026, 20.2025.
+    if (parts.length === 2 && parts[1] >= 2000 && parts[1] <= 2099) return false;
+
+    // Reject common image/icon dimensions if they somehow arrive dotted.
+    if (parts.length === 2 && parts[0] >= 32 && parts[1] >= 32) return false;
+
+    return true;
   }
+
 
   compareVersions(a, b) {
     const pa = this.versionParts(a);

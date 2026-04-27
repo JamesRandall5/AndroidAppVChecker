@@ -72,7 +72,7 @@ Body:
 The 20i dashboard calls this endpoint for one app at a time when running all checks.
 
 
-## 1.3.3
+## 1.3.4
 Improves APKMirror Android TV parsing when direct APKMirror access is blocked. Adds Jina Search fallback parsing, fixes Google Play `VARY` cleaning, and preserves the TV-safe rule: generic/mobile versions are never selected as final.
 
 ## Exact APKMirror source URLs
@@ -80,3 +80,11 @@ Improves APKMirror Android TV parsing when direct APKMirror access is blocked. A
 This build checks only the exact APKMirror URL supplied by 20i. The URL can be the normal Android TV listing page, a variant/filter page, or a specific release page. It does not crawl broad variant/search pages, so it should return quickly and avoid drifting onto mobile versions.
 
 For apps where the normal listing page does not expose the latest version to Render, paste the APKMirror variant/filter URL that shows the latest Android TV version into the 20i APKMirror URL field.
+
+
+## 1.3.4 fixes
+
+- Rejects image filenames such as `57.png` and `2.png` as versions.
+- Rejects date-like fragments such as `11.2026`.
+- Selects higher-confidence APKMirror release URL candidates before broad reader text.
+- Keeps the TV-safe rule: no generic/mobile version is selected.
