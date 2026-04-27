@@ -1,0 +1,17 @@
+{
+  "name": "android-app-checker-render-test",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal Render service to look up Google Play app versions for one package at a time.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20 <22"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "google-play-scraper": "^9.2.1"
+  }
+}

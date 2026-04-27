@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: android-app-checker-test
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: GPLAY_COUNTRY
+        value: gb
+      - key: GPLAY_LANGUAGE
+        value: en
+      - key: REQUEST_TIMEOUT_MS
+        value: 30000
+      - key: CHECKER_SHARED_SECRET
+        sync: false
