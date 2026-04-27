@@ -27,4 +27,4 @@ NODE_VERSION=20.18.0
 https://YOUR-RENDER-SERVICE.onrender.com/health
 ```
 
-The response should include build `android-tv-production-apkmirror-url-safe-1.3.0`.
+The response should include build `android-tv-production-apkmirror-url-variant-safe-1.3.2`.

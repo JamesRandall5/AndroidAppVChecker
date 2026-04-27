@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-url-tv-safe-1.3.1';
+const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-url-variant-tv-safe-1.3.2';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -84,38 +84,101 @@ class AndroidTvVersionProvider {
   }
 
   async lookupApkMirrorUrl(normalised, meta = {}) {
-    const searchQueries = this.buildApkMirrorSearchQueries(normalised, meta);
-    const targets = [
-      { method: 'direct', url: normalised.listing_url, confidence: 0.98, kind: 'html' },
-      { method: 'jina-reader', url: `https://r.jina.ai/${normalised.listing_url}`, confidence: 0.96, kind: 'reader' },
-      ...searchQueries.map((query, index) => ({
-        method: `jina-search-${index + 1}`,
-        url: `https://s.jina.ai/${encodeURIComponent(query)}`,
-        confidence: 0.94 - (index * 0.02),
-        kind: 'search',
-      })),
-    ];
     const out = [];
+    const targets = [];
+    const queued = new Set();
+    const maxTargets = 10;
 
-    for (const target of targets) {
+    const addTarget = (target) => {
+      if (!target || !target.url || queued.has(target.url) || targets.length >= maxTargets) return;
+      queued.add(target.url);
+      targets.push(target);
+    };
+
+    addTarget({ method: 'direct', url: normalised.listing_url, confidence: 0.98, kind: 'html' });
+    addTarget({ method: 'jina-reader', url: 'https://r.jina.ai/' + normalised.listing_url, confidence: 0.96, kind: 'reader' });
+
+    // APKMirror sometimes exposes the newest Android TV release only on filtered
+    // variant pages, for example /variant-{"minapi_slug":"minapi-23"}/.
+    // Build a small, bounded set of common Android TV min-api filters instead of
+    // broad web discovery, so one app check cannot become a crawler.
+    for (const variantUrl of this.commonApkMirrorVariantUrls(normalised)) {
+      addTarget({
+        method: 'jina-variant-' + this.variantLabel(variantUrl),
+        url: 'https://r.jina.ai/' + variantUrl,
+        confidence: 0.95,
+        kind: 'variant-reader',
+      });
+    }
+
+    for (let index = 0; index < targets.length && index < maxTargets; index += 1) {
+      const target = targets[index];
       try {
         const text = await this.fetchText(target.url, {
           'User-Agent': PLAY_UA,
-          'Accept-Language': `${this.language}-${this.country.toUpperCase()},${this.language};q=0.9`,
-          Accept: target.kind === 'reader' || target.kind === 'search'
+          'Accept-Language': this.language + '-' + this.country.toUpperCase() + ',' + this.language + ';q=0.9',
+          Accept: target.kind === 'reader' || target.kind === 'variant-reader'
             ? 'text/plain,*/*;q=0.8'
             : 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain,*/*;q=0.8',
           Referer: 'https://www.google.com/',
         });
+
+        // If the base page exposes extra variant-filter URLs, enqueue a few of
+        // them. This remains tied to the supplied APKMirror Android TV listing and
+        // does not use generic/mobile source discovery.
+        for (const discoveredVariantUrl of this.extractVariantUrls(text, normalised).slice(0, 4)) {
+          addTarget({
+            method: 'jina-discovered-variant-' + this.variantLabel(discoveredVariantUrl),
+            url: 'https://r.jina.ai/' + discoveredVariantUrl,
+            confidence: 0.95,
+            kind: 'variant-reader',
+          });
+        }
+
         const parsed = this.extractTvCandidates(text, normalised, target);
         if (parsed.length) out.push(...parsed);
-        else out.push(this.candidate({ source: 'apkmirror-tv-url', url: target.url, error: `${target.method}: fetched but no TV release version parsed` }));
+        else out.push(this.candidate({ source: 'apkmirror-tv-url', url: target.url, error: target.method + ': fetched but no TV release version parsed' }));
       } catch (error) {
-        out.push(this.candidate({ source: 'apkmirror-tv-url', url: target.url, error: `${target.method}: ${error.message || 'fetch failed'}` }));
+        out.push(this.candidate({ source: 'apkmirror-tv-url', url: target.url, error: target.method + ': ' + (error.message || 'fetch failed') }));
       }
     }
 
     return out;
+  }
+
+  commonApkMirrorVariantUrls(normalised) {
+    const base = normalised.listing_url.replace(/\/+$/, '/');
+    const minApiSlugs = ['minapi-21', 'minapi-23', 'minapi-24', 'minapi-26', 'minapi-28'];
+    return minApiSlugs.map((slug) => {
+      const json = encodeURIComponent(JSON.stringify({ minapi_slug: slug }));
+      return base + 'variant-' + json + '/';
+    });
+  }
+
+  variantLabel(url) {
+    const decoded = decodeURIComponent(String(url || ''));
+    const match = decoded.match(/minapi[-_]slug["']?\s*[:=]\s*["']?(minapi-\d+)/i) || decoded.match(/minapi-(\d+)/i);
+    if (!match) return 'filtered';
+    const value = String(match[1]).startsWith('minapi-') ? String(match[1]) : 'minapi-' + match[1];
+    return value.replace(/[^a-z0-9-]+/gi, '-').toLowerCase();
+  }
+
+  extractVariantUrls(text, normalised) {
+    const out = [];
+    const base = new URL(normalised.listing_url);
+    const basePath = base.pathname.replace(/\/+$/, '') + '/';
+    const pattern = /(?:href=["']([^"']*variant-[^"']+)["']|(https?:\/\/www\.apkmirror\.com\/apk\/[^\s"'<>\)]+variant-[^\s"'<>\)]+))/gi;
+    let match;
+    while ((match = pattern.exec(String(text || '')))) {
+      const raw = this.decodeHtml(match[1] || match[2] || '');
+      let absolute;
+      try { absolute = new URL(raw, normalised.listing_url); } catch (_) { continue; }
+      if (!APKMIRROR_HOST_RE.test(absolute.hostname)) continue;
+      if (!absolute.pathname.startsWith(basePath)) continue;
+      if (!/variant-/i.test(absolute.pathname)) continue;
+      out.push(absolute.origin + absolute.pathname.replace(/\/+$/, '/'));
+    }
+    return this.uniqueBy(out, v => v);
   }
 
   buildApkMirrorSearchQueries(normalised, meta = {}) {
