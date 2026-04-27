@@ -1,8 +1,9 @@
-// REAL CANDIDATES BUILD 1.0.4
-// This file contains the actual version-candidate logic.
+// ANDROID TV RANKED CANDIDATES BUILD 1.0.6
+// This file collects every public candidate and ranks them instead of returning the first usable result.
 // Important behaviour: Google Play "VARY" is kept as diagnostic data only and is never returned as the final version.
+// If fallback sources disagree, Android-TV/platform relevance wins first, then version number is used as a tie-breaker.
 
-const PROVIDER_BUILD = 'google-play-provider-real-candidates-1.0.4';
+const PROVIDER_BUILD = 'google-play-provider-android-tv-ranked-1.0.6';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 
@@ -125,6 +126,8 @@ class AndroidTvVersionProvider {
       source: winner.source,
       source_url: winner.url || '',
       confidence: winner.confidence,
+      selected_reason: winner.selected_reason || '',
+      rank_score: winner.rank_score || null,
       warning: this.buildSummary(candidates.filter(c => !c.usable || c.source !== winner.source), notes),
       candidates,
     };
@@ -318,12 +321,85 @@ class AndroidTvVersionProvider {
   pickBestCandidate(candidates) {
     const usable = candidates.filter(c => c.usable && this.isUsableVersion(c.version));
     if (!usable.length) return null;
-    usable.sort((a, b) => {
-      const confidenceDiff = Number(b.confidence || 0) - Number(a.confidence || 0);
-      if (Math.abs(confidenceDiff) > 0.001) return confidenceDiff;
-      return this.compareVersions(b.version, a.version);
-    });
-    return usable[0];
+
+    // Google Play is the most authoritative source when it exposes a real version.
+    // When it says VARY, it is only metadata and the fallback candidates must be ranked.
+    const play = usable.find(c => c.source === 'google-play-scraper');
+    if (play && this.isUsableVersion(play.version)) {
+      return { ...play, selected_reason: 'Google Play exposed a concrete version.' };
+    }
+
+    // Android TV caveat:
+    // Exact package-name JSON lookups can still return a stale/generic track. Crunchyroll
+    // is the proof case: Aptoide JSON returns 2.6.0 while public app pages show 3.61.0.
+    // So we rank every fallback candidate first by Android-TV/platform relevance and
+    // source reliability, then use version number as a tie-breaker within close scores.
+    const ranked = usable
+      .map(c => ({ ...c, rank_score: this.rankCandidate(c, usable) }))
+      .sort((a, b) => {
+        const rankDiff = Number(b.rank_score || 0) - Number(a.rank_score || 0);
+        if (Math.abs(rankDiff) > 12) return rankDiff;
+
+        const versionDiff = this.compareVersions(b.version, a.version);
+        if (versionDiff !== 0) return versionDiff;
+
+        if (Math.abs(rankDiff) > 0.001) return rankDiff;
+        const confidenceDiff = Number(b.confidence || 0) - Number(a.confidence || 0);
+        if (Math.abs(confidenceDiff) > 0.001) return confidenceDiff;
+        return String(a.source || '').localeCompare(String(b.source || ''));
+      });
+
+    const winner = ranked[0];
+    if (!winner) return null;
+    return {
+      ...winner,
+      selected_reason: this.explainSelection(winner, ranked),
+    };
+  }
+
+  rankCandidate(candidate, allUsable = []) {
+    const source = String(candidate.source || '');
+    const url = String(candidate.url || '');
+    const note = String(candidate.note || '');
+    let score = 0;
+
+    const hasTvSignal = /android[-_ ]?tv|for[-_ ]?android[-_ ]?tv/i.test(url + ' ' + note) || url.includes('/download/tv');
+    const isHtml = source.includes('html');
+    const isJson = source.includes('getmeta') || source.includes('search');
+
+    // Source priority for Android TV mode. HTML/app pages and explicit TV URLs are more
+    // useful than Aptoide JSON because JSON can return a generic/stale package track.
+    if (source === 'google-play-scraper') score += 100;
+    else if (source === 'apkpure-html' && hasTvSignal) score += 96;
+    else if (source === 'apkpure-html') score += 66;
+    else if (source === 'aptoide-html') score += 86;
+    else if (source === 'google-play-html') score += 65;
+    else if (source === 'aptoide-getmeta') score += 48;
+    else if (source === 'aptoide-search') score += 42;
+    else score += 30;
+
+    if (hasTvSignal) score += 18;
+    if (isHtml) score += 8; // public app pages usually expose the consumer-visible release number.
+    if (isJson) score -= 6; // exact package is useful, but not enough for Android TV latest.
+    score += Number(candidate.confidence || 0) * 6;
+
+    const sameVersionCount = allUsable.filter(c => c.version === candidate.version).length;
+    score += Math.min(8, sameVersionCount * 2);
+
+    const maxVersion = allUsable
+      .map(c => c.version)
+      .filter(Boolean)
+      .sort((a, b) => this.compareVersions(b, a))[0];
+    if (maxVersion && candidate.version === maxVersion) score += 5;
+
+    return Number(score.toFixed(3));
+  }
+
+  explainSelection(winner, ranked) {
+    const otherVersions = Array.from(new Set(ranked.filter(c => c.version !== winner.version).map(c => c.version))).filter(Boolean);
+    if (!otherVersions.length) return `Selected ${winner.version} because it was the only usable fallback version.`;
+    const top = ranked.slice(0, 4).map(c => `${c.version} from ${c.source} score ${c.rank_score}`).join('; ');
+    return `Selected ${winner.version} because Google Play returned VARY and this candidate ranked highest for Android TV relevance/source quality. Other versions seen: ${otherVersions.join(', ')}. Top candidates: ${top}.`;
   }
 
   buildSummary(candidates, notes) {

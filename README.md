@@ -77,3 +77,13 @@ You should see:
 "build": "android-tv-real-candidates-1.0.4",
 "provider_build": "google-play-provider-real-candidates-1.0.4"
 ```
+
+
+## Build 1.0.6
+
+This build ranks fallback candidates. If Google Play returns VARY, it does not pick the first usable result. It prefers the highest credible fallback version, then source quality. This is intended to fix cases such as Crunchyroll where Aptoide JSON returns 2.6.0 but an Android TV public page exposes 3.61.0.
+
+
+## 1.0.6 candidate ranking note
+
+This build fixes the Crunchyroll test case where Aptoide JSON returned `2.6.0` but Aptoide HTML and APKMirror public listings showed `3.61.0`. The service now collects all candidates first and ranks them by Android TV relevance/source quality before using version number as a tie-breaker.
