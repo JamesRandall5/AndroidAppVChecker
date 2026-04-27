@@ -1,8 +1,8 @@
 {
   "name": "android-app-checker-render-test",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
-  "description": "Minimal Render service to look up Android TV app versions, with Google Play plus public fallback pages.",
+  "description": "Minimal Render service to look up Android TV app versions with candidate diagnostics and Aptoide API fallback.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
