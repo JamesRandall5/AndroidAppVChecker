@@ -1,27 +1,21 @@
-# Minimal Render service for Android app version lookup
+# Android App Checker - Minimal Render Test
 
-This service exposes two endpoints:
+Commit these files/folders to GitHub:
 
-- `GET /health`
-- `POST /check-one`
+- package.json
+- server.js
+- providers/google-play.js
+- .node-version
+- .env.example
+- render.yaml
+- README.md
 
-## Local test
+Do not commit:
 
-1. Copy `.env.example` to `.env`.
-2. Set `CHECKER_SHARED_SECRET`.
-3. Run:
+- .env
+- node_modules/
+- .DS_Store
 
-```bash
-npm install
-npm start
-```
-
-4. Test:
-
-```bash
-curl http://localhost:10000/health
-curl -X POST http://localhost:10000/check-one \
-  -H "Authorization: Bearer your-secret" \
-  -H "Content-Type: application/json" \
-  -d '{"package_name":"com.crunchyroll.crunchyroid"}'
-```
+Render build command: npm install
+Render start command: npm start
+Health check path: /health

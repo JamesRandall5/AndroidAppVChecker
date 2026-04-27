@@ -12,6 +12,6 @@
   },
   "dependencies": {
     "express": "^4.21.2",
-    "google-play-scraper": "^9.2.1"
+    "google-play-scraper": "10.1.2"
   }
 }
