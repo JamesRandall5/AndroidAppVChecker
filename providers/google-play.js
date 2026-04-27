@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-apkmirror-url-tv-safe-1.2.0';
+const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-url-tv-safe-1.3.0';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;

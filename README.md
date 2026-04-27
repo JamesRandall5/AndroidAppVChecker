@@ -1,17 +1,16 @@
 # Android TV Version Checker - Render Service
 
-This is the production-ready test Render service for checking Android TV app versions.
+This is the production Render checker used by the 20i dashboard.
 
-It does **not** try to guess the APKMirror page. The 20i side sends:
+It is intentionally **TV-safe**:
 
-- `package_name`
-- `apkmirror_tv_url`
+- Google Play is used for metadata only.
+- The final version must come from the APKMirror Android TV listing URL supplied by the 20i app record.
+- If the supplied URL cannot be fetched or parsed as Android TV, the service returns `ok: false` and `version: null` rather than returning a generic/mobile version.
 
-The final selected version must come from the supplied APKMirror Android TV listing URL. Google Play is used for metadata only.
+## Files for GitHub
 
-## Required GitHub files
-
-Put these files in the root of your Render GitHub repo:
+Put these files at the root of your Render GitHub repo:
 
 ```text
 package.json
@@ -34,10 +33,8 @@ node_modules/
 
 ## Render environment variables
 
-Add these in Render > Environment:
-
 ```text
-CHECKER_SHARED_SECRET=your-long-random-secret
+CHECKER_SHARED_SECRET=use-the-same-secret-as-20i
 GPLAY_COUNTRY=gb
 GPLAY_LANGUAGE=en
 REQUEST_TIMEOUT_MS=30000
@@ -46,56 +43,30 @@ NODE_VERSION=20.18.0
 
 ## Render settings
 
-- Build Command: `npm install`
-- Start Command: `npm start`
-- Health Check Path: `/health`
-
-## Test endpoints
-
-Health:
-
 ```text
-GET /health
+Build Command: npm install
+Start Command: npm start
+Health Check Path: /health
 ```
 
-Check one app:
+## Endpoint
+
+`POST /check-one`
+
+Headers:
 
 ```text
-POST /check-one
 Authorization: Bearer YOUR_SECRET
 Content-Type: application/json
-
-{
-  "package_name": "uk.co.uktv.dave",
-  "apkmirror_tv_url": "https://www.apkmirror.com/apk/uktv-media-ltd/uktv-play-tv-shows-on-demand-android-tv/"
-}
 ```
 
-## Important behaviour
-
-If APKMirror cannot be fetched or parsed, this service returns:
+Body:
 
 ```json
 {
-  "ok": false,
-  "status": "needs_review",
-  "version": null
+  "package_name": "com.netflix.ninja",
+  "apkmirror_tv_url": "https://www.apkmirror.com/apk/netflix-inc/netflix-android-tv/"
 }
 ```
 
-It will not fall back to a generic/mobile version, because that is how wrong results such as mobile app versions appear in an Android TV checker.
-
-## Example APKMirror Android TV listing URLs
-
-```text
-Netflix:
-https://www.apkmirror.com/apk/netflix-inc/netflix-android-tv/
-
-Crunchyroll:
-https://www.apkmirror.com/apk/crunchyroll-llc-2/crunchyroll-everything-anime-android-tv/
-
-U / Dave / UKTV:
-https://www.apkmirror.com/apk/uktv-media-ltd/uktv-play-tv-shows-on-demand-android-tv/
-```
-
-Use the app listing URL if possible, not an old release download URL. If a release URL is entered, the service tries to normalise it back to the app listing URL.
+The 20i dashboard calls this endpoint for one app at a time when running all checks.
