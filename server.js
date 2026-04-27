@@ -6,7 +6,7 @@ const sharedSecret = String(process.env.CHECKER_SHARED_SECRET || '').trim();
 const gplayCountry = String(process.env.GPLAY_COUNTRY || 'gb').trim();
 const gplayLanguage = String(process.env.GPLAY_LANGUAGE || 'en').trim();
 const requestTimeoutMs = Number(process.env.REQUEST_TIMEOUT_MS || 30000);
-const buildVersion = 'android-tv-apkmirror-ranked-1.0.7';
+const buildVersion = 'android-tv-programmatic-apkmirror-tv-1.0.9';
 
 if (!sharedSecret) {
   console.error('CHECKER_SHARED_SECRET is required');
@@ -35,12 +35,12 @@ app.get('/health', (req, res) => {
   res.json({
     ok: true,
     service: 'android-app-checker-render-test',
-    source: 'Google Play + APKMirror Android TV + public fallbacks',
+    source: 'Google Play metadata + programmatic APKMirror Android TV discovery + public fallbacks',
     build: buildVersion,
     provider_build: PROVIDER_BUILD,
     country: gplayCountry,
     language: gplayLanguage,
-    behaviour: 'VARY is never returned as the final version; APKMirror Android TV candidates are preferred, then other fallbacks are ranked.',
+    behaviour: 'No package-specific APKMirror overrides. APKMirror URLs are discovered programmatically and only Android TV candidates are allowed to outrank generic fallbacks.',
   });
 });
 

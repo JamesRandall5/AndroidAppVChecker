@@ -1,13 +1,20 @@
-# Android App Checker Render Minimal Test - APKMirror Android TV build 1.0.7
+# Android App Checker Render Minimal Test - Programmatic APKMirror Android TV build 1.0.9
 
-This build keeps Google Play for metadata, but when Google Play returns `VARY` it tries APKMirror Android TV listings before lower-confidence public fallbacks.
+This build keeps Google Play for metadata, then programmatically discovers APKMirror Android TV listing pages. It does not use package-specific APKMirror overrides or hard-coded app paths.
+
+The important behaviour is:
+
+- Google Play `VARY` is never returned as the final version.
+- APKMirror URLs are discovered using title, developer, package name and Android TV search signals.
+- APKMirror candidates are only accepted when the listing/candidate has Android TV signals.
+- Android TV APKMirror candidates outrank generic/mobile fallbacks such as Aptoide JSON.
 
 Health response should show:
 
 ```json
 {
-  "build": "android-tv-apkmirror-ranked-1.0.7",
-  "provider_build": "google-play-provider-apkmirror-android-tv-ranked-1.0.7"
+  "build": "android-tv-programmatic-apkmirror-tv-1.0.9",
+  "provider_build": "google-play-provider-programmatic-apkmirror-tv-1.0.9"
 }
 ```
 
