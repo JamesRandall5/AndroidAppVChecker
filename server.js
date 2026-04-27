@@ -1,12 +1,12 @@
 const express = require('express');
-const { GooglePlayProvider } = require('./providers/google-play');
+const { AndroidTvVersionProvider, PROVIDER_BUILD } = require('./providers/google-play');
 
 const port = Number(process.env.PORT || 10000);
 const sharedSecret = String(process.env.CHECKER_SHARED_SECRET || '').trim();
 const gplayCountry = String(process.env.GPLAY_COUNTRY || 'gb').trim();
 const gplayLanguage = String(process.env.GPLAY_LANGUAGE || 'en').trim();
 const requestTimeoutMs = Number(process.env.REQUEST_TIMEOUT_MS || 30000);
-const buildVersion = 'android-tv-candidates-1.0.3';
+const buildVersion = 'android-tv-real-candidates-1.0.4';
 
 if (!sharedSecret) {
   console.error('CHECKER_SHARED_SECRET is required');
@@ -14,7 +14,7 @@ if (!sharedSecret) {
 }
 
 const app = express();
-const provider = new GooglePlayProvider({
+const provider = new AndroidTvVersionProvider({
   country: gplayCountry,
   language: gplayLanguage,
   timeoutMs: requestTimeoutMs,
@@ -35,10 +35,12 @@ app.get('/health', (req, res) => {
   res.json({
     ok: true,
     service: 'android-app-checker-render-test',
-    source: 'Google Play + Android TV fallback',
+    source: 'Google Play + Android TV public fallbacks',
     build: buildVersion,
+    provider_build: PROVIDER_BUILD,
     country: gplayCountry,
     language: gplayLanguage,
+    behaviour: 'VARY is never returned as the final version; candidates are returned for diagnostics.',
   });
 });
 
@@ -50,10 +52,15 @@ app.post('/check-one', requireBearer, async (req, res) => {
     }
 
     const result = await provider.lookup(packageName);
-    return res.status(result.ok ? 200 : 502).json({ build: buildVersion, ...result });
+
+    // Return 200 even when no usable version is found, so the 20i test page can show
+    // the full candidates list instead of only showing a cURL/HTTP error.
+    return res.status(200).json({ build: buildVersion, provider_build: PROVIDER_BUILD, ...result });
   } catch (error) {
     return res.status(500).json({
       ok: false,
+      build: buildVersion,
+      provider_build: PROVIDER_BUILD,
       error: error.message || 'Unknown error',
     });
   }

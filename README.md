@@ -1,28 +1,38 @@
-# Android App Checker Render Minimal Test - candidates build
+# Android App Checker Render Minimal Test - REAL candidates build 1.0.4
 
-This minimal Render service checks one Android package and returns every version candidate it can find.
+This is the corrected minimal Render test service.
 
-It does **not** treat Google Play `VARY` as a real version. It keeps it as `google_play_version` / a candidate, then tries free public fallback sources.
+The important code is in:
 
-Sources in this build:
+```text
+providers/google-play.js
+```
 
-1. Google Play via `google-play-scraper`
-2. Aptoide JSON API `app/getMeta`
-3. Aptoide JSON API `apps/search`
-4. APKPure public HTML pages
-5. Direct Google Play page parse
-6. Aptoide public HTML pages
+This build does the following:
 
-The response includes:
+1. Calls Google Play through `google-play-scraper` for metadata.
+2. Treats `VARY` / `Varies with device` as **not usable**.
+3. Tries direct Google Play HTML.
+4. Tries Aptoide JSON `app/getMeta`.
+5. Tries Aptoide JSON `apps/search`.
+6. Tries APKPure HTML URLs.
+7. Tries Aptoide public HTML pages.
+8. Returns a `candidates` array so you can see every source attempted.
 
-- `version` - the best usable version found, or `null`
-- `source` - which source won
-- `confidence` - rough confidence score
-- `candidates` - all versions/errors found from each source
+It will never return `version: "VARY"` as the final version. If no real version is found, it returns:
+
+```json
+{
+  "ok": false,
+  "version": null,
+  "google_play_version": "VARY",
+  "candidates": []
+}
+```
 
 ## GitHub files
 
-Put these files in the root of the GitHub repo:
+Put exactly these files in the root of the repo:
 
 ```text
 package.json
@@ -35,7 +45,13 @@ README.md
 providers/google-play.js
 ```
 
-Do not upload `.env` or `node_modules`.
+Do not upload:
+
+```text
+.env
+node_modules/
+.DS_Store
+```
 
 ## Render env vars
 
@@ -47,16 +63,17 @@ REQUEST_TIMEOUT_MS=30000
 NODE_VERSION=20.18.0
 ```
 
-## Test
+## Health check
 
-Deploy, then open:
+After deploy, open:
 
 ```text
 https://YOUR-SERVICE.onrender.com/health
 ```
 
-The health response should include:
+You should see:
 
 ```json
-"build": "android-tv-candidates-1.0.3"
+"build": "android-tv-real-candidates-1.0.4",
+"provider_build": "google-play-provider-real-candidates-1.0.4"
 ```
