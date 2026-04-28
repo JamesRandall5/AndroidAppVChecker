@@ -5,7 +5,7 @@ This is the production Render checker used by the 20i dashboard.
 It is intentionally **TV-safe**:
 
 - Google Play is used for metadata only.
-- The final version must come from the APKMirror Android TV source URL supplied by the 20i app record.
+- The final version must come from the APKMirror source URL supplied by the 20i app record.
 - If the supplied URL cannot be fetched or parsed as Android TV, the service returns `ok: false` and `version: null` rather than returning a generic/mobile version.
 
 ## Files for GitHub
@@ -88,3 +88,13 @@ For apps where the normal listing page does not expose the latest version to Ren
 - Rejects date-like fragments such as `11.2026`.
 - Selects higher-confidence APKMirror release URL candidates before broad reader text.
 - Keeps the TV-safe rule: no generic/mobile version is selected.
+
+## 1.3.6
+
+Adds support for broader APKMirror source pages, including developer pages such as:
+
+```text
+https://www.apkmirror.com/apk/crunchyroll-llc-2/
+```
+
+The resolver is still TV-safe. It only accepts APKMirror release rows/links that contain Android TV, rejects Fire TV in any format, rejects generic/mobile rows, and selects the highest valid Android TV version found on the supplied source page.

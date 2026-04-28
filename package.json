@@ -1,8 +1,8 @@
 {
   "name": "android-tv-version-checker-render",
-  "version": "1.3.5",
+  "version": "1.3.6",
   "private": true,
-  "description": "Render service for checking confirmed Android TV app versions using Google Play metadata and a supplied APKMirror Android TV listing URL.",
+  "description": "Render service for checking confirmed Android TV app versions using Google Play metadata and a supplied APKMirror source URL.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
