@@ -41,3 +41,6 @@ https://www.apkmirror.com/apk/crunchyroll-llc-2/crunchyroll-everything-anime-and
 ```
 
 The resolver remains TV-safe: Android TV evidence is required, Fire TV is rejected, and generic/mobile versions are not selected.
+
+## 1.3.9 notes
+This build fixes the parser regression that could select a date fragment such as `2025.3.14` as a version. It also reads `Latest:` lines on APKMirror variant pages, which is needed for apps such as Crunchyroll where the latest Android TV version is exposed in the variant table rather than the normal all-versions block returned to Render.

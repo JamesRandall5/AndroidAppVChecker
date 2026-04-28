@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-source-variant-safe-1.3.8';
+const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-source-variant-safe-1.3.9';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -298,7 +298,7 @@ class AndroidTvVersionProvider {
     const sourceUrl = `https://www.apkmirror.com${cleanPath}${url.search || ''}`;
     const lowerSource = sourceUrl.toLowerCase();
     return {
-      kind: appSlug ? (releaseSlug ? 'release' : 'app') : 'developer',
+      kind: appSlug ? (/^variant-/i.test(releaseSlug) || /variant/i.test(url.search) ? 'variant' : (releaseSlug ? 'release' : 'app')) : 'developer',
       listing_url: appSlug ? `https://www.apkmirror.com/apk/${developerSlug}/${appSlug}/` : `https://www.apkmirror.com/apk/${developerSlug}/`,
       source_url: sourceUrl,
       developer_slug: developerSlug,
@@ -357,22 +357,27 @@ class AndroidTvVersionProvider {
     if (slug && rest.startsWith(`${slug}-`)) rest = rest.slice(slug.length + 1);
     rest = rest.replace(/-android-apk.*$/, '').replace(/-apk.*$/, '').replace(/-release$/, '');
     const buildMatch = rest.match(/(?:^|-)build-(\d{2,})/i);
-    const versionPart = buildMatch ? rest.slice(0, buildMatch.index) : rest;
+    if (buildMatch) rest = rest.slice(0, buildMatch.index);
 
-    // Pick the last semantic-ish numeric run. This avoids app-title numbers in slugs.
-    const matches = [...versionPart.matchAll(/(\d+(?:-\d+){1,5}(?:-(?:rc|beta|alpha)\d*)?)/gi)];
-    const raw = matches.length ? matches[matches.length - 1][1] : '';
-    return { version: raw ? this.hyphenVersionToDotted(raw) : '', version_code: buildMatch?.[1] || '' };
+    // APKMirror slugs often end with a release date, e.g. 26-6-0rc5-2026-04-21.
+    // Pick the first real semantic version after the app slug, not the trailing date.
+    const match = rest.match(/(?:^|-)(\d+(?:-\d+){1,5})(?:(rc|beta|alpha)(\d*))?(?=$|-)/i);
+    if (!match) return { version: '', version_code: buildMatch?.[1] || '' };
+    const main = this.hyphenVersionToDotted(match[1]);
+    const suffix = match[2] ? `-${String(match[2]).toLowerCase()}${match[3] || ''}` : '';
+    return { version: `${main}${suffix}`, version_code: buildMatch?.[1] || '' };
   }
 
   versionFromAndroidTvLine(line) {
     const text = String(line || '').replace(/\s+/g, ' ');
     if (this.isFireTvContext(text)) return { version: '', version_code: '' };
+    const versionPattern = String.raw`([0-9]+(?:\.[0-9]+){1,5}(?:(?:\+|-)(?:rc|beta|alpha)\d*)?(?:-20[0-9]{2}\.[0-9]{2}\.[0-9]{2})?)`;
     const patterns = [
-      /\(\s*Android\s*TV\s*\)[^0-9]{0,220}(?:version\s*:?\s*)?([0-9]+(?:\.[0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:\s*\((\d+)\)|\s+build\s+([0-9]+))?/i,
-      /Android\s*TV[^0-9]{0,220}(?:version\s*:?\s*)?([0-9]+(?:\.[0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:\s*\((\d+)\)|\s+build\s+([0-9]+))?/i,
-      /android-tv[^0-9]{0,220}(?:version\s*:?\s*)?([0-9]+(?:[-.][0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:[-\s]+build[-\s]+([0-9]+)|\s*\((\d+)\))?/i,
-      /Version\s*:?\s*([0-9]+(?:\.[0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)\s*\((\d+)\).*Android\s*TV/i,
+      new RegExp('\\(\\s*Android\\s*TV\\s*\\)[^0-9]{0,220}(?:version\\s*:?\\s*)?' + versionPattern + '(?:\\s*\\((\\d+)\\)|\\s+build\\s+(\\d+))?', 'i'),
+      new RegExp('Android\\s*TV[^0-9]{0,220}(?:version\\s*:?\\s*)?' + versionPattern + '(?:\\s*\\((\\d+)\\)|\\s+build\\s+(\\d+))?', 'i'),
+      new RegExp('android-tv[^0-9]{0,220}(?:version\\s*:?\\s*)?' + versionPattern + '(?:[-\\s]+build[-\\s]+(\\d+)|\\s*\\((\\d+)\\))?', 'i'),
+      new RegExp('Version\\s*:?\\s*' + versionPattern + '\\s*\\((\\d+)\\).*Android\\s*TV', 'i'),
+      new RegExp('Latest\\s*:?\\s*' + versionPattern + '[^A-Za-z0-9]{0,60}(?:on|uploaded)?[^A-Za-z0-9]{0,120}Android\\s*TV', 'i'),
     ];
     for (const pattern of patterns) {
       const match = text.match(pattern);
@@ -385,9 +390,11 @@ class AndroidTvVersionProvider {
     const source = String(text || '').replace(/\s+/g, ' ');
     const out = [];
     const seen = new Set();
+    const versionPattern = String.raw`([0-9]+(?:\.[0-9]+){1,5}(?:(?:\+|-)(?:rc|beta|alpha)\d*)?(?:-20[0-9]{2}\.[0-9]{2}\.[0-9]{2})?)`;
     const patterns = [
-      /\bVersion\s*:?\s*([0-9]+(?:\.[0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)\s*(?:\((\d{2,})\))?/gi,
-      /\b([0-9]+(?:\.[0-9A-Za-z]+){1,5})(?:\s*\((\d{2,})\))?\s+for\s+Android\b/gi,
+      new RegExp('\\bVersion\\s*:?\\s*' + versionPattern + '\\s*(?:\\((\\d{2,})\\))?', 'gi'),
+      new RegExp('\\bLatest\\s*:?\\s*' + versionPattern + '(?:\\s+on\\s+[A-Za-z]+\\s+\\d{1,2},\\s+20\\d{2})?', 'gi'),
+      new RegExp('\\b' + versionPattern + '(?:\\s*\\((\\d{2,})\\))?\\s+for\\s+Android\\b', 'gi'),
     ];
     for (const pattern of patterns) {
       let match;
@@ -554,9 +561,12 @@ class AndroidTvVersionProvider {
 
   isUsableVersion(value) {
     const version = this.cleanVersion(value);
-    if (!/^[0-9]+(?:\.[0-9]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?$/i.test(version)) return false;
-    const parts = version.split(/[-_]/, 1)[0].split('.').map(v => Number.parseInt(v, 10));
+    if (!/^[0-9]+(?:\.[0-9]+){1,5}(?:(?:\+|-)(?:rc|beta|alpha)\d*)?(?:-20[0-9]{2}\.[0-9]{2}\.[0-9]{2})?$/i.test(version)) return false;
+    const main = version.split(/[+_-]/, 1)[0];
+    const parts = main.split('.').map(v => Number.parseInt(v, 10));
     if (parts.length < 2) return false;
+    // Reject standalone dates accidentally parsed as versions, e.g. 2025.03.14 or 2026.04.21.
+    if (parts.length >= 3 && parts[0] >= 2000 && parts[0] <= 2099 && parts[1] >= 1 && parts[1] <= 12 && parts[2] >= 1 && parts[2] <= 31) return false;
     if (parts.length === 2 && parts[1] >= 2000 && parts[1] <= 2099) return false;
     if (parts.length === 2 && parts[0] >= 32 && parts[1] >= 32) return false;
     return true;
@@ -575,8 +585,10 @@ class AndroidTvVersionProvider {
   }
 
   versionParts(version) {
-    const [main, suffix = ''] = String(version || '').toLowerCase().split(/[-_]/, 2);
-    return { numbers: main.split('.').map(v => Number.parseInt(v, 10)).filter(Number.isFinite), suffix };
+    const raw = String(version || '').toLowerCase();
+    const main = raw.split(/[+_-]/, 1)[0];
+    const suffixMatch = raw.match(/(?:\+|-|_)((?:rc|beta|alpha)\d*)/i);
+    return { numbers: main.split('.').map(v => Number.parseInt(v, 10)).filter(Number.isFinite), suffix: suffixMatch?.[1] || '' };
   }
 
   suffixWeight(suffix) {
