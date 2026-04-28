@@ -6,7 +6,7 @@ const sharedSecret = String(process.env.CHECKER_SHARED_SECRET || '').trim();
 const gplayCountry = String(process.env.GPLAY_COUNTRY || 'gb').trim();
 const gplayLanguage = String(process.env.GPLAY_LANGUAGE || 'en').trim();
 const requestTimeoutMs = Number(process.env.REQUEST_TIMEOUT_MS || 30000);
-const buildVersion = 'android-tv-production-apkmirror-source-safe-1.3.7';
+const buildVersion = 'android-tv-production-apkmirror-source-variant-safe-1.3.8';
 
 if (!sharedSecret) {
   console.error('CHECKER_SHARED_SECRET is required');
@@ -39,7 +39,7 @@ app.get('/health', (req, res) => {
     provider_build: PROVIDER_BUILD,
     country: gplayCountry,
     language: gplayLanguage,
-    behaviour: 'Production service. Google Play metadata is collected, but the final version must come from confirmed APKMirror Android TV release rows or links from the source URL supplied by 20i. Developer-level APKMirror pages are supported. If APKMirror/Jina cannot expose the source rows, a bounded search-result fallback is used while still requiring Android TV evidence and rejecting Fire TV/mobile results.',
+    behaviour: 'Production service. Google Play metadata is collected, but the final version must come from confirmed APKMirror Android TV release rows or links from the source URL supplied by 20i. Developer-level and exact APKMirror variant/filter URLs are supported. No slow search fallback is used.',
     endpoints: {
       check_one: 'POST /check-one { package_name, apkmirror_tv_url }',
     },

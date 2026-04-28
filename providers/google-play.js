@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-source-tv-safe-1.3.7';
+const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-source-variant-safe-1.3.8';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -10,7 +10,7 @@ class AndroidTvVersionProvider {
     this.language = String(language || 'en');
     this.country = String(country || 'gb');
     // Keep source fetches bounded so a single app can return diagnostics quickly.
-    this.timeoutMs = Math.max(6000, Math.min(Number(timeoutMs || 30000), 30000));
+    this.timeoutMs = Math.max(6000, Math.min(Number(timeoutMs || 18000), 18000));
     this.gplayModule = null;
   }
 
@@ -34,7 +34,11 @@ class AndroidTvVersionProvider {
 
     await this.safeAdd(candidates, notes, 'google-play-scraper', async () => {
       const gplay = await this.loadScraper();
-      const app = await gplay.app({ appId: packageName, lang: this.language, country: this.country });
+      const app = await this.withTimeout(
+        gplay.app({ appId: packageName, lang: this.language, country: this.country }),
+        Math.min(8000, this.timeoutMs),
+        'Google Play request timed out'
+      );
       meta.title = String(app?.title || '');
       meta.developer = String(app?.developer || app?.developerName || '');
       meta.updated = this.normaliseUpdated(app?.updated || app?.released || '');
@@ -61,11 +65,6 @@ class AndroidTvVersionProvider {
     }
 
     await this.safeAdd(candidates, notes, 'apkmirror-source-url', () => this.lookupApkMirrorSource(normalised, meta));
-
-    const hasConfirmedTv = candidates.some(c => c && c.source === 'apkmirror-source-url' && c.usable && c.tv_confirmed);
-    if (!hasConfirmedTv) {
-      await this.safeAdd(candidates, notes, 'apkmirror-search-fallback', () => this.lookupApkMirrorSearchFallback(normalised, meta));
-    }
 
     const winner = this.pickBestTvCandidate(candidates);
     if (winner) {
@@ -99,46 +98,6 @@ class AndroidTvVersionProvider {
     );
   }
 
-
-  async lookupApkMirrorSearchFallback(normalised, meta = {}) {
-    const out = [];
-    const title = String(meta.title || '').replace(/\s+/g, ' ').trim();
-    const appTitle = title || String(normalised.app_slug || '').replace(/-/g, ' ');
-    const scope = normalised.developer_slug
-      ? `site:apkmirror.com/apk/${normalised.developer_slug}${normalised.app_slug ? `/${normalised.app_slug}` : ''}`
-      : 'site:apkmirror.com';
-    const queries = this.uniqueBy([
-      `${scope} "${appTitle}" "Android TV" "Version"`,
-      `${scope} "Android TV" "${appTitle.replace(/:.*$/, '').trim() || appTitle}"`,
-      `${scope} "Android TV" "${String(normalised.app_slug || '').replace(/-/g, ' ')}"`,
-    ].filter(Boolean), q => q).slice(0, 3);
-
-    const endpoints = [];
-    for (const query of queries) {
-      endpoints.push({ method: 'duckduckgo-lite', url: `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`, query, confidence: 0.86 });
-      endpoints.push({ method: 'duckduckgo-html', url: `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`, query, confidence: 0.84 });
-    }
-
-    for (const endpoint of endpoints.slice(0, 4)) {
-      try {
-        const text = await this.fetchText(endpoint.url, {
-          'User-Agent': PLAY_UA,
-          'Accept-Language': `${this.language}-${this.country.toUpperCase()},${this.language};q=0.9`,
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain,*/*;q=0.8',
-          Referer: 'https://duckduckgo.com/',
-        }, Math.min(9000, this.timeoutMs));
-        const parsed = this.extractTvCandidatesFromSearch(text, normalised, endpoint, meta);
-        if (parsed.length) out.push(...parsed);
-        else out.push(this.candidate({ source: 'apkmirror-search-fallback', url: endpoint.url, error: `${endpoint.method}: fetched but no Android TV APKMirror result parsed` }));
-      } catch (error) {
-        out.push(this.candidate({ source: 'apkmirror-search-fallback', url: endpoint.url, error: `${endpoint.method}: ${error.message || 'fetch failed'}` }));
-      }
-      if (out.some(c => c && c.usable && c.tv_confirmed)) break;
-    }
-
-    return this.uniqueBy(out, c => `${c.source}:${c.version}:${c.version_code}:${c.url}:${c.note}`);
-  }
-
   async lookupApkMirrorSource(normalised, meta = {}) {
     // Production-safe behaviour: fetch only the exact source URL supplied by 20i.
     // The source may be:
@@ -149,8 +108,8 @@ class AndroidTvVersionProvider {
     // We do not crawl away from this source. We only parse Android TV release links/rows on the fetched page.
     const sourceUrl = normalised.source_url;
     const targets = [
-      { method: 'direct-source-url', url: sourceUrl, confidence: 0.99, kind: 'html' },
-      { method: 'jina-reader-source-url', url: `https://r.jina.ai/${sourceUrl}`, confidence: 0.97, kind: 'reader' },
+      { method: 'direct-source-url', url: sourceUrl, confidence: 0.99, kind: 'html', timeout: 6000 },
+      { method: 'jina-reader-source-url', url: `https://r.jina.ai/${sourceUrl}`, confidence: 0.97, kind: 'reader', timeout: 12000 },
     ];
     const out = [];
 
@@ -163,7 +122,7 @@ class AndroidTvVersionProvider {
             ? 'text/plain,*/*;q=0.8'
             : 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain,*/*;q=0.8',
           Referer: 'https://www.google.com/',
-        });
+        }, target.timeout);
         const parsed = this.extractTvCandidates(text, normalised, target, meta);
         if (parsed.length) out.push(...parsed);
         else out.push(this.candidate({ source: 'apkmirror-source-url', url: target.url, error: `${target.method}: fetched but no Android TV release row/link parsed` }));
@@ -173,65 +132,6 @@ class AndroidTvVersionProvider {
     }
 
     return out;
-  }
-
-
-  extractTvCandidatesFromSearch(text, normalised, endpoint, meta = {}) {
-    const body = String(text || '');
-    const plain = this.toPlainText(body);
-    const out = [];
-    const seen = new Set();
-
-    for (const item of this.extractApkMirrorUrlsFromSearch(body, normalised)) {
-      const combined = `${item.absolute_url} ${item.app_slug} ${item.release_slug || ''} ${item.title || ''}`;
-      if (!this.isConfirmedAndroidTvContext(combined)) continue;
-      if (this.isFireTvContext(combined)) continue;
-      if (!this.sourceScopeAllowsRelease(item, normalised, meta)) continue;
-      const info = item.release_slug ? this.versionFromReleaseSlug(item.release_slug, item.app_slug) : this.versionFromAndroidTvLine(combined);
-      if (!this.isUsableVersion(info.version)) continue;
-      const key = `${info.version}:${info.version_code || ''}:${item.absolute_url}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(this.candidate({
-        source: 'apkmirror-search-fallback',
-        version: info.version,
-        version_code: info.version_code || '',
-        updated: this.updatedFromText(item.title || ''),
-        url: item.absolute_url,
-        usable: true,
-        tv_confirmed: true,
-        confidence: endpoint.confidence,
-        tv_evidence: `Search result contains APKMirror Android TV release within supplied scope (${endpoint.method}).`,
-        note: `Parsed Android TV APKMirror search result via ${endpoint.method}.`,
-      }));
-    }
-
-    const lines = plain.split(/\r?\n/).map(v => v.trim()).filter(Boolean);
-    for (let i = 0; i < lines.length; i += 1) {
-      const chunk = lines.slice(Math.max(0, i - 2), Math.min(lines.length, i + 5)).join(' ');
-      if (!/apkmirror\.com/i.test(chunk) && !/APKMirror/i.test(chunk)) continue;
-      if (!this.isConfirmedAndroidTvContext(chunk)) continue;
-      if (this.isFireTvContext(chunk)) continue;
-      if (!this.textScopeAllowsChunk(chunk, normalised, meta)) continue;
-      const info = this.versionFromAndroidTvLine(chunk);
-      if (!this.isUsableVersion(info.version)) continue;
-      const key = `${info.version}:${info.version_code || ''}:${endpoint.url}:snippet`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(this.candidate({
-        source: 'apkmirror-search-fallback',
-        version: info.version,
-        version_code: info.version_code || '',
-        updated: this.updatedFromText(chunk),
-        url: endpoint.url,
-        usable: true,
-        tv_confirmed: true,
-        confidence: Math.min(endpoint.confidence, 0.80),
-        tv_evidence: `Search snippet contains APKMirror Android TV text and a semantic version (${endpoint.method}).`,
-        note: `Parsed Android TV search snippet via ${endpoint.method}.`,
-      }));
-    }
-    return this.uniqueBy(out, c => `${c.source}:${c.version}:${c.version_code}:${c.url}`);
   }
 
   extractTvCandidates(text, normalised, target, meta = {}) {
@@ -269,29 +169,30 @@ class AndroidTvVersionProvider {
       }));
     }
 
-    // 2) Specific release/variant page fallback. If the supplied source itself is an Android TV release
-    //    URL, parse the exact release version even when no link is present in reader text.
+    // 2) Specific release/variant page fallback. If the supplied source itself is an Android TV
+    //    release or variant/filter URL, parse versions from the exact page text. This is intentionally
+    //    bounded: no search crawling, no broad variant discovery, and no generic/mobile final result.
     if ((normalised.is_release_url || normalised.is_variant_url) && normalised.source_has_tv_hint && !this.isFireTvContext(normalised.source_url)) {
-      const info = normalised.is_release_url
-        ? this.versionFromReleaseSlug(normalised.release_slug, normalised.app_slug || '')
-        : this.versionFromGenericLine(plain, normalised.app_slug || '');
-      if (this.isUsableVersion(info.version)) {
-        const key = `${info.version}:${info.version_code || ''}:${normalised.source_url}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          out.push(this.candidate({
-            source: 'apkmirror-source-url',
-            version: info.version,
-            version_code: info.version_code || '',
-            updated: this.updatedFromText(plain),
-            url: normalised.source_url,
-            usable: true,
-            tv_confirmed: true,
-            confidence: Math.min(target.confidence, 0.95),
-            tv_evidence: `Supplied APKMirror source URL is an Android TV ${normalised.is_variant_url ? 'variant' : 'release'} URL.`,
-            note: `Parsed exact APKMirror Android TV source URL via ${target.method}.`,
-          }));
-        }
+      const exactInfos = normalised.is_release_url
+        ? [this.versionFromReleaseSlug(normalised.release_slug, normalised.app_slug || '')]
+        : this.versionCandidatesFromVariantText(plain);
+      for (const info of exactInfos) {
+        if (!this.isUsableVersion(info.version)) continue;
+        const key = `${info.version}:${info.version_code || ''}:${normalised.source_url}:exact`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(this.candidate({
+          source: 'apkmirror-source-url',
+          version: info.version,
+          version_code: info.version_code || '',
+          updated: this.updatedFromText(plain),
+          url: normalised.source_url,
+          usable: true,
+          tv_confirmed: true,
+          confidence: Math.min(target.confidence, normalised.is_variant_url ? 0.96 : 0.95),
+          tv_evidence: `Supplied APKMirror source URL is an Android TV ${normalised.is_variant_url ? 'variant/filter' : 'release'} URL.`,
+          note: `Parsed exact APKMirror Android TV source URL via ${target.method}.`,
+        }));
       }
     }
 
@@ -325,44 +226,6 @@ class AndroidTvVersionProvider {
     }
 
     return this.uniqueBy(out, c => `${c.source}:${c.version}:${c.version_code}:${c.url}`);
-  }
-
-
-  extractApkMirrorUrlsFromSearch(text, normalised) {
-    const out = [];
-    const source = String(text || '');
-    const urlPattern = /(?:https?:\/\/www\.apkmirror\.com\/[^\s"'<>\\)\]]+|uddg=([^&"'<>]+)|href=["']([^"']+)["'])/gi;
-    let match;
-    while ((match = urlPattern.exec(source))) {
-      const raw = match[1] ? decodeURIComponent(match[1]) : (match[2] || match[0]).replace(/^href=["']?|["']$/g, '');
-      let absolute;
-      try { absolute = new URL(raw, 'https://www.apkmirror.com/'); } catch (_) { continue; }
-      if (!APKMIRROR_HOST_RE.test(absolute.hostname)) {
-        const maybe = absolute.searchParams?.get?.('uddg');
-        if (maybe) {
-          try { absolute = new URL(maybe); } catch (_) { continue; }
-        }
-      }
-      if (!APKMIRROR_HOST_RE.test(absolute.hostname)) continue;
-      const parts = absolute.pathname.split('/').filter(Boolean);
-      if (parts[0] !== 'apk' || parts.length < 3) continue;
-      const developerSlug = parts[1] || '';
-      const appSlug = parts[2] || '';
-      const releaseSlug = parts[3] || '';
-      if (normalised.developer_slug && developerSlug !== normalised.developer_slug) continue;
-      if (normalised.app_slug && appSlug !== normalised.app_slug) continue;
-      if (releaseSlug && /^variant-/i.test(releaseSlug)) continue;
-      const context = this.toPlainText(this.contextAround(source, match[0], 900));
-      out.push({
-        raw,
-        developer_slug: developerSlug,
-        app_slug: appSlug,
-        release_slug: releaseSlug,
-        absolute_url: `${absolute.origin}/${parts.slice(0, releaseSlug ? 4 : 3).join('/')}/`,
-        title: context,
-      });
-    }
-    return this.uniqueBy(out, item => `${item.absolute_url}:${item.title.slice(0, 80)}`);
   }
 
   extractReleaseUrls(text, normalised) {
@@ -518,6 +381,29 @@ class AndroidTvVersionProvider {
     return { version: '', version_code: '' };
   }
 
+  versionCandidatesFromVariantText(text) {
+    const source = String(text || '').replace(/\s+/g, ' ');
+    const out = [];
+    const seen = new Set();
+    const patterns = [
+      /\bVersion\s*:?\s*([0-9]+(?:\.[0-9A-Za-z]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)\s*(?:\((\d{2,})\))?/gi,
+      /\b([0-9]+(?:\.[0-9A-Za-z]+){1,5})(?:\s*\((\d{2,})\))?\s+for\s+Android\b/gi,
+    ];
+    for (const pattern of patterns) {
+      let match;
+      while ((match = pattern.exec(source))) {
+        const version = this.cleanVersion(match[1]);
+        const version_code = match[2] || '';
+        if (!this.isUsableVersion(version)) continue;
+        const key = `${version}:${version_code}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ version, version_code });
+      }
+    }
+    return out;
+  }
+
   versionFromGenericLine(line) {
     const text = String(line || '').replace(/\s+/g, ' ').trim();
     if (/\.(?:png|jpg|jpeg|webp|gif|svg)\b/i.test(text)) return { version: '', version_code: '' };
@@ -587,14 +473,32 @@ class AndroidTvVersionProvider {
 
   async fetchText(url, headers = {}, timeoutOverrideMs = null) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutOverrideMs || this.timeoutMs);
+    const timeout = Math.max(3000, Math.min(Number(timeoutOverrideMs || this.timeoutMs), this.timeoutMs));
+    const timer = setTimeout(() => controller.abort(), timeout);
     try {
       const response = await fetch(url, { headers, signal: controller.signal, redirect: 'follow' });
       const text = await response.text();
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return text;
+    } catch (error) {
+      if (error?.name === 'AbortError') throw new Error(`request timed out after ${timeout}ms`);
+      throw error;
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  async withTimeout(promise, timeoutMs, message = 'operation timed out') {
+    let timer;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -761,7 +665,7 @@ class AndroidTvVersionProvider {
 
   sourceDebug(candidates, normalised) {
     const versionsSeen = (candidates || [])
-      .filter(c => (c.source === 'apkmirror-source-url' || c.source === 'apkmirror-search-fallback') && c.version)
+      .filter(c => c.source === 'apkmirror-source-url' && c.version)
       .map(c => ({ version: c.version, url: c.url, tv: c.tv_confirmed, note: c.note }))
       .slice(0, 20);
     return {

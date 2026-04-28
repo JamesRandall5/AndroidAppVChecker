@@ -30,6 +30,14 @@ https://YOUR-RENDER-SERVICE.onrender.com/health
 The response should include build `android-tv-production-apkmirror-exact-url-safe-1.3.5`.
 
 
-## 1.3.7 note
+## 1.3.8
 
-Adds a bounded APKMirror search-result fallback for cases where direct APKMirror fetches return 403 and the reader view does not expose Android TV rows. The fallback still only accepts results containing Android TV and rejects Fire TV/mobile rows.
+Stable variant/filter URL build. This removes the slow search fallback from 1.3.7 and checks only the exact APKMirror source URL supplied by 20i plus a single Jina reader fallback. Direct APKMirror fetches are capped at 6 seconds and Jina reader fetches are capped at 12 seconds, so 20i should receive JSON instead of timing out.
+
+For apps such as Crunchyroll, use the APKMirror Android TV variant/filter URL as the source, for example:
+
+```text
+https://www.apkmirror.com/apk/crunchyroll-llc-2/crunchyroll-everything-anime-android-tv/variant-%7B%22minapi_slug%22%3A%22minapi-23%22%7D/
+```
+
+The resolver remains TV-safe: Android TV evidence is required, Fire TV is rejected, and generic/mobile versions are not selected.

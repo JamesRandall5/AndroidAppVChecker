@@ -89,7 +89,7 @@ For apps where the normal listing page does not expose the latest version to Ren
 - Selects higher-confidence APKMirror release URL candidates before broad reader text.
 - Keeps the TV-safe rule: no generic/mobile version is selected.
 
-## 1.3.7
+## 1.3.8
 
 Adds support for broader APKMirror source pages, including developer pages such as:
 
@@ -100,6 +100,14 @@ https://www.apkmirror.com/apk/crunchyroll-llc-2/
 The resolver is still TV-safe. It only accepts APKMirror release rows/links that contain Android TV, rejects Fire TV in any format, rejects generic/mobile rows, and selects the highest valid Android TV version found on the supplied source page.
 
 
-## 1.3.7 note
+## 1.3.8
 
-Adds a bounded APKMirror search-result fallback for cases where direct APKMirror fetches return 403 and the reader view does not expose Android TV rows. The fallback still only accepts results containing Android TV and rejects Fire TV/mobile rows.
+Stable variant/filter URL build. This removes the slow search fallback from 1.3.7 and checks only the exact APKMirror source URL supplied by 20i plus a single Jina reader fallback. Direct APKMirror fetches are capped at 6 seconds and Jina reader fetches are capped at 12 seconds, so 20i should receive JSON instead of timing out.
+
+For apps such as Crunchyroll, use the APKMirror Android TV variant/filter URL as the source, for example:
+
+```text
+https://www.apkmirror.com/apk/crunchyroll-llc-2/crunchyroll-everything-anime-android-tv/variant-%7B%22minapi_slug%22%3A%22minapi-23%22%7D/
+```
+
+The resolver remains TV-safe: Android TV evidence is required, Fire TV is rejected, and generic/mobile versions are not selected.
