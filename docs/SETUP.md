@@ -28,3 +28,8 @@ https://YOUR-RENDER-SERVICE.onrender.com/health
 ```
 
 The response should include build `android-tv-production-apkmirror-exact-url-safe-1.3.5`.
+
+
+## 1.3.7 note
+
+Adds a bounded APKMirror search-result fallback for cases where direct APKMirror fetches return 403 and the reader view does not expose Android TV rows. The fallback still only accepts results containing Android TV and rejects Fire TV/mobile rows.

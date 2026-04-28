@@ -89,7 +89,7 @@ For apps where the normal listing page does not expose the latest version to Ren
 - Selects higher-confidence APKMirror release URL candidates before broad reader text.
 - Keeps the TV-safe rule: no generic/mobile version is selected.
 
-## 1.3.6
+## 1.3.7
 
 Adds support for broader APKMirror source pages, including developer pages such as:
 
@@ -98,3 +98,8 @@ https://www.apkmirror.com/apk/crunchyroll-llc-2/
 ```
 
 The resolver is still TV-safe. It only accepts APKMirror release rows/links that contain Android TV, rejects Fire TV in any format, rejects generic/mobile rows, and selects the highest valid Android TV version found on the supplied source page.
+
+
+## 1.3.7 note
+
+Adds a bounded APKMirror search-result fallback for cases where direct APKMirror fetches return 403 and the reader view does not expose Android TV rows. The fallback still only accepts results containing Android TV and rejects Fire TV/mobile rows.
