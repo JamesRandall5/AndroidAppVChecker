@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.8';
+const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.9';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -153,12 +153,17 @@ class AndroidTvVersionProvider {
     const exactSourceCandidate = this.candidateFromExactApkMirrorSourceUrl(normalised);
     if (exactSourceCandidate) out.push(exactSourceCandidate);
 
+    const packageFallbackTargets = this.samePackageApkPureFallbackTargets(normalised, packageName);
     const targets = [
+      // Per-package fallbacks go first. For Tubi, APKMirror frequently returns a
+      // security verification page from Render, while APKPure exposes the branch
+      // version history. This keeps the check quick and avoids waiting on known
+      // blocked APKMirror pages before trying the source that actually works.
+      ...packageFallbackTargets,
       { method: 'direct-source-url', url: sourceUrl, confidence: 0.99, kind: 'html', timeout: 4000 },
       { method: 'jina-reader-source-url', url: `https://r.jina.ai/${sourceUrl}`, confidence: 0.97, kind: 'reader', timeout: 5000 },
       ...this.sameAppApkMirrorVariantTargets(normalised),
       ...this.sameDeveloperApkMirrorTargets(normalised),
-      ...this.samePackageApkPureFallbackTargets(normalised, packageName),
     ];
 
     for (const target of targets) {
@@ -176,7 +181,7 @@ class AndroidTvVersionProvider {
           Referer: 'https://www.google.com/',
         }, target.timeout);
         if (this.looksLikeBlockedSecurityPage(text)) {
-          out.push(this.candidate({ source: 'apkmirror-source-url', url: target.url, error: `${target.method}: fetched APKMirror security verification page; no release rows available` }));
+          out.push(this.candidate({ source: target.source || 'apkmirror-source-url', url: target.url, error: `${target.method}: fetched APKMirror security verification page; no release rows available` }));
           continue;
         }
         const parsed = target.kind === 'apkpure-tv-branch'
@@ -185,7 +190,7 @@ class AndroidTvVersionProvider {
         if (parsed.length) out.push(...parsed);
         else out.push(this.candidate({ source: target.source || 'apkmirror-source-url', url: target.url, error: `${target.method}: fetched but no Android TV release row/link parsed` }));
       } catch (error) {
-        out.push(this.candidate({ source: 'apkmirror-source-url', url: target.url, error: `${target.method}: ${error.message || 'fetch failed'}` }));
+        out.push(this.candidate({ source: target.source || 'apkmirror-source-url', url: target.url, error: `${target.method}: ${error.message || 'fetch failed'}` }));
       }
     }
 
@@ -195,7 +200,9 @@ class AndroidTvVersionProvider {
   async lookupApkPureSource(normalised, meta = {}, packageName = '') {
     const sourceUrl = normalised.source_url;
     const alternateUrl = normalised.alternate_url || '';
+    const packageFallbackTargets = this.samePackageApkPureFallbackTargets(normalised, packageName);
     const targets = [
+      ...packageFallbackTargets,
       { method: 'direct-source-url', url: sourceUrl, confidence: 0.96, kind: 'html', timeout: 7000 },
       { method: 'jina-reader-source-url', url: `https://r.jina.ai/${sourceUrl}`, confidence: 0.94, kind: 'reader', timeout: 12000 },
     ];
@@ -215,11 +222,13 @@ class AndroidTvVersionProvider {
             : 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain,*/*;q=0.8',
           Referer: 'https://www.google.com/',
         }, target.timeout);
-        const parsed = this.extractApkPureTvCandidates(text, normalised, target, meta, packageName);
+        const parsed = target.kind === 'apkpure-tv-branch'
+          ? this.extractKnownTvBranchApkPureFallbackCandidates(text, normalised, target, packageName)
+          : this.extractApkPureTvCandidates(text, normalised, target, meta, packageName);
         if (parsed.length) { out.push(...parsed); return out; }
-        else out.push(this.candidate({ source: 'apkpure-tv-url', url: target.url, error: `${target.method}: fetched but no Android TV version parsed` }));
+        else out.push(this.candidate({ source: target.source || 'apkpure-tv-url', url: target.url, error: `${target.method}: fetched but no usable version parsed` }));
       } catch (error) {
-        out.push(this.candidate({ source: 'apkpure-tv-url', url: target.url, error: `${target.method}: ${error.message || 'fetch failed'}` }));
+        out.push(this.candidate({ source: target.source || 'apkpure-tv-url', url: target.url, error: `${target.method}: ${error.message || 'fetch failed'}` }));
       }
     }
     return out;
@@ -438,41 +447,49 @@ class AndroidTvVersionProvider {
   }
 
   samePackageApkPureFallbackTargets(normalised, packageName = '') {
-    // Tubi is a special case where APKMirror's Android TV page is often hidden behind
-    // bot/security verification from Render, while APKPure's version-history page stays
-    // fetchable and exposes both branches. This is not a fixed version: it parses the
-    // newest Tubi Android TV branch version at check time and ignores generic/mobile rows.
+    // Tubi is a controlled per-package fallback. APKPure's Tubi version history does
+    // not label rows as Android TV, so this fallback intentionally does NOT search
+    // for Android TV text. Instead it only accepts the known Tubi TV branch pattern
+    // x.y.5xxx and ignores normal/mobile x.y.z rows. This is not a fixed version:
+    // it parses the newest matching branch version visible at check time.
     const pkg = String(packageName || '').trim().toLowerCase();
     if (pkg !== 'com.tubitv') return [];
-    if (!normalised || normalised.source_type !== 'apkmirror') return [];
-    const isKnownTubiDeveloperPage = normalised.kind === 'developer' && normalised.developer_slug === 'tubi-tv';
-    if (!(normalised.source_has_tv_hint || isKnownTubiDeveloperPage) || this.isFireTvContext(normalised.source_url)) return [];
+    if (!normalised || this.isFireTvContext(normalised.source_url)) return [];
 
-    return [
-      {
-        method: 'apkpure-tubi-tv-branch-versions',
-        source: 'apkpure-package-versions-fallback',
-        url: 'https://apkpure.com/tubi-movies-tv-shows-android-app/com.tubitv/versions',
-        confidence: 0.79,
-        kind: 'apkpure-tv-branch',
-        timeout: 5000,
-      },
-      {
-        method: 'apkpure-net-tubi-tv-branch-versions',
-        source: 'apkpure-package-versions-fallback',
-        url: 'https://apkpure.net/tubi-movies-tv-shows-android-app/com.tubitv/versions',
-        confidence: 0.78,
-        kind: 'apkpure-tv-branch',
-        timeout: 5000,
-      },
-    ];
+    const isKnownTubiApkMirror = normalised.source_type === 'apkmirror'
+      && (normalised.developer_slug === 'tubi-tv' || normalised.source_has_tv_hint);
+    const isKnownTubiApkPure = normalised.source_type === 'apkpure'
+      && (normalised.package_from_path === 'com.tubitv' || /com\.tubitv/i.test(normalised.source_url));
+    if (!isKnownTubiApkMirror && !isKnownTubiApkPure) return [];
+
+    const urls = [];
+    if (normalised.source_type === 'apkpure' && /\/versions\/?(?:$|[?#])/i.test(normalised.source_url)) {
+      urls.push({ url: normalised.source_url, method: 'apkpure-tubi-supplied-versions', confidence: 0.82 });
+    }
+    urls.push(
+      { url: 'https://apkpure.com/tubi-movies-tv-shows-android-app/com.tubitv/versions', method: 'apkpure-tubi-tv-branch-versions', confidence: 0.81 },
+      { url: 'https://apkpure.net/tubi-movies-tv-shows-android-app/com.tubitv/versions', method: 'apkpure-net-tubi-tv-branch-versions', confidence: 0.80 },
+    );
+
+    return this.uniqueBy(urls, item => item.url).map(item => ({
+      method: item.method,
+      source: 'apkpure-package-versions-fallback',
+      url: item.url,
+      confidence: item.confidence,
+      kind: 'apkpure-tv-branch',
+      timeout: 4500,
+    }));
   }
 
   extractKnownTvBranchApkPureFallbackCandidates(text, normalised, target, packageName = '') {
     const pkg = String(packageName || '').trim().toLowerCase();
     if (pkg !== 'com.tubitv') return [];
-    const isKnownTubiDeveloperPage = normalised?.kind === 'developer' && normalised?.developer_slug === 'tubi-tv';
-    if (!(normalised?.source_has_tv_hint || isKnownTubiDeveloperPage) || this.isFireTvContext(normalised.source_url)) return [];
+    if (!normalised || this.isFireTvContext(normalised.source_url)) return [];
+    const isKnownTubiApkMirror = normalised.source_type === 'apkmirror'
+      && (normalised.developer_slug === 'tubi-tv' || normalised.source_has_tv_hint);
+    const isKnownTubiApkPure = normalised.source_type === 'apkpure'
+      && (normalised.package_from_path === 'com.tubitv' || /com\.tubitv/i.test(normalised.source_url));
+    if (!isKnownTubiApkMirror && !isKnownTubiApkPure) return [];
 
     const raw = String(text || '');
     const plain = this.toPlainText(raw).replace(/\s+/g, ' ').trim();
@@ -480,7 +497,7 @@ class AndroidTvVersionProvider {
 
     const out = [];
     const seen = new Set();
-    const pattern = /Tubi\s+TV\s+([0-9]+\.[0-9]+\.5[0-9]{3,})(?:\s+([0-9]+(?:\.[0-9]+)?\s*MB))?(?:\s+([A-Za-z]{3,9}\s+\d{1,2},\s+20\d{2}))?/gi;
+    const pattern = /Tubi\s+TV[^0-9]{0,80}([0-9]+\.[0-9]+\.5[0-9]{3,})(?:\s+([0-9]+(?:\.[0-9]+)?\s*MB))?(?:\s+([A-Za-z]{3,9}\s+\d{1,2},\s+20\d{2}))?/gi;
     let match;
     while ((match = pattern.exec(plain))) {
       const version = this.cleanVersion(match[1]);
@@ -499,8 +516,8 @@ class AndroidTvVersionProvider {
         usable: true,
         tv_confirmed: true,
         confidence: target.confidence,
-        tv_evidence: `APKMirror Android TV source was blocked; APKPure's Tubi history exposes the Tubi TV branch version pattern x.y.5xxx${sizeText ? ` (${sizeText})` : ''}. Generic/mobile x.y.z rows are ignored.`,
-        note: `Parsed latest Tubi Android TV branch version from APKPure versions page via ${target.method}.`,
+        tv_evidence: `Tubi-specific APKPure fallback: APKPure does not label this history as Android TV, so the checker accepted only the Tubi TV branch pattern x.y.5xxx${sizeText ? ` (${sizeText})` : ''} and ignored generic/mobile x.y.z rows.`,
+        note: `Parsed latest Tubi TV branch version from APKPure versions page via ${target.method}; no Android TV text required for this Tubi-only rule.`,
       }));
     }
 

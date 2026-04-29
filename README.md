@@ -152,3 +152,10 @@ The `/check-one` endpoint now accepts `trust_google_play_version`. When true and
 - When an Android-TV-specific APKMirror app page is blocked, the checker now tries the same developer page before the APKPure fallback.
 - The developer page parser only accepts rows/links with nearby `Android TV` evidence, rejects Fire TV rows, and ignores newer generic/mobile uploads from the same developer page.
 - Stops additional fallback requests as soon as a confirmed Android TV candidate is found, keeping checks bounded and avoiding the 45-second timeout issue.
+
+## 1.4.9
+
+- Render-only update. No 20i/admin GUI changes are required.
+- Moves the Tubi-specific APKPure version-history fallback before APKMirror page fetches, so Tubi checks do not wait on APKMirror security-verification pages first.
+- The Tubi fallback intentionally does not require `Android TV` text from APKPure, because APKPure's Tubi history does not separate that label. It only accepts the Tubi TV branch pattern `x.y.5xxx` and ignores generic/mobile versions such as `x.y.z`.
+- Supports using the APKPure Tubi versions page directly as the version source as well as using it as a fallback from APKMirror.

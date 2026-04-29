@@ -49,3 +49,7 @@ This build fixes the parser regression that could select a date fragment such as
 ## Android TV only / Google Play trusted mode
 
 The `/check-one` endpoint now accepts `trust_google_play_version`. When true and Google Play exposes a real semantic version, the service can return that Google Play version as the confirmed latest version. Use this only for packages that are known to be Android TV only, because it intentionally bypasses the normal requirement for APKMirror/APKPure Android TV evidence.
+
+## 1.4.9 Tubi APKPure fallback
+
+This is a Render-only change. For `com.tubitv`, the service can use APKPure's version-history page without requiring Android TV text. It accepts only the Tubi TV branch pattern `x.y.5xxx` and ignores the generic/mobile `x.y.z` branch.
