@@ -136,10 +136,19 @@ The resolver only accepts APKPure results when the page/source has Android TV ev
 The `/check-one` endpoint now accepts `trust_google_play_version`. When true and Google Play exposes a real semantic version, the service can return that Google Play version as the confirmed latest version. Use this only for packages that are known to be Android TV only, because it intentionally bypasses the normal requirement for APKMirror/APKPure Android TV evidence.
 
 
-## 1.4.6
+## 1.4.7
 
-- Keeps the existing provider order and TV-safe rules, but improves the final APKMirror-blocked fallback path.
-- When APKMirror returns HTTP 403 or a security verification page, the service now tries bounded public search-result pages only after direct/reader/variant APKMirror attempts fail.
-- Adds Bing RSS, improved Bing/DDG redirect decoding, and Android-TV-specific release-slug parsing so indexed results such as `tubi-free-movies-live-tv-android-tv-10-15-5001-release` can be used without fetching the blocked APKMirror release page.
-- Adds generic-sibling APKMirror search scoping for apps whose TV page is blocked but whose generic app listing indexes Android TV rows, while still rejecting generic/mobile versions unless the snippet/title has adjacent Android TV evidence.
-- Stops fetching additional public-search fallbacks as soon as one confirmed Android TV candidate has been found, keeping checks bounded.
+- Fixes the timeout risk introduced by the broad public-search fallback in 1.4.6.
+- General Bing/DuckDuckGo search fallbacks are disabled because they can exceed the 45 second 20i -> Render request window.
+- APKMirror direct/reader/variant fetches now use shorter timeouts.
+- Adds a bounded Tubi-specific fallback source path when APKMirror blocks the Android TV page: APKPure's Tubi version-history page is checked and only the Tubi Android TV branch pattern `x.y.5xxx` is accepted.
+- This is **not** a fixed Tubi version. The checker parses the newest matching branch version at check time, so future values like `10.16.5000` or `10.17.5001` would be selected when they appear.
+- Generic/mobile Tubi versions such as `10.17.0` and `10.16.1` are ignored by that fallback.
+- Fire TV remains rejected.
+
+## 1.4.8
+
+- Adds support for APKMirror developer pages such as `https://www.apkmirror.com/apk/tubi-tv/` as a valid version source.
+- When an Android-TV-specific APKMirror app page is blocked, the checker now tries the same developer page before the APKPure fallback.
+- The developer page parser only accepts rows/links with nearby `Android TV` evidence, rejects Fire TV rows, and ignores newer generic/mobile uploads from the same developer page.
+- Stops additional fallback requests as soon as a confirmed Android TV candidate is found, keeping checks bounded and avoiding the 45-second timeout issue.

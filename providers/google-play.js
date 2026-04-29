@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.6';
+const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.8';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -11,7 +11,7 @@ class AndroidTvVersionProvider {
     this.language = String(language || 'en');
     this.country = String(country || 'gb');
     // Keep source fetches bounded so a single app can return diagnostics quickly.
-    this.timeoutMs = Math.max(6000, Math.min(Number(timeoutMs || 18000), 18000));
+    this.timeoutMs = Math.max(5000, Math.min(Number(timeoutMs || 12000), 12000));
     this.gplayModule = null;
   }
 
@@ -98,7 +98,7 @@ class AndroidTvVersionProvider {
     }
 
     if (normalised.source_type === 'apkmirror') {
-      await this.safeAdd(candidates, notes, 'apkmirror-source-url', () => this.lookupApkMirrorSource(normalised, meta));
+      await this.safeAdd(candidates, notes, 'apkmirror-source-url', () => this.lookupApkMirrorSource(normalised, meta, packageName));
     } else if (normalised.source_type === 'apkpure') {
       await this.safeAdd(candidates, notes, 'apkpure-tv-url', () => this.lookupApkPureSource(normalised, meta, packageName));
     } else {
@@ -138,7 +138,7 @@ class AndroidTvVersionProvider {
     );
   }
 
-  async lookupApkMirrorSource(normalised, meta = {}) {
+  async lookupApkMirrorSource(normalised, meta = {}, packageName = '') {
     // Production-safe behaviour: fetch only the exact source URL supplied by 20i.
     // The source may be:
     //   /apk/{developer}/                      developer page with multiple apps
@@ -154,17 +154,18 @@ class AndroidTvVersionProvider {
     if (exactSourceCandidate) out.push(exactSourceCandidate);
 
     const targets = [
-      { method: 'direct-source-url', url: sourceUrl, confidence: 0.99, kind: 'html', timeout: 6000 },
-      { method: 'jina-reader-source-url', url: `https://r.jina.ai/${sourceUrl}`, confidence: 0.97, kind: 'reader', timeout: 12000 },
+      { method: 'direct-source-url', url: sourceUrl, confidence: 0.99, kind: 'html', timeout: 4000 },
+      { method: 'jina-reader-source-url', url: `https://r.jina.ai/${sourceUrl}`, confidence: 0.97, kind: 'reader', timeout: 5000 },
       ...this.sameAppApkMirrorVariantTargets(normalised),
-      ...this.sameAppPublicSearchTargets(normalised, meta),
+      ...this.sameDeveloperApkMirrorTargets(normalised),
+      ...this.samePackageApkPureFallbackTargets(normalised, packageName),
     ];
 
     for (const target of targets) {
       // Public search fallbacks are only needed until one confirmed Android TV
       // version is found. This avoids extra slow/block-prone requests and keeps
       // existing direct APKMirror/APKPure behaviour unchanged for apps that work.
-      if (target.kind === 'search' && this.hasUsableTvCandidate(out)) break;
+      if (this.hasUsableTvCandidate(out)) break;
       try {
         const text = await this.fetchText(target.url, {
           'User-Agent': PLAY_UA,
@@ -178,9 +179,11 @@ class AndroidTvVersionProvider {
           out.push(this.candidate({ source: 'apkmirror-source-url', url: target.url, error: `${target.method}: fetched APKMirror security verification page; no release rows available` }));
           continue;
         }
-        const parsed = this.extractTvCandidates(text, normalised, target, meta);
+        const parsed = target.kind === 'apkpure-tv-branch'
+          ? this.extractKnownTvBranchApkPureFallbackCandidates(text, normalised, target, packageName)
+          : this.extractTvCandidates(text, normalised, target, meta);
         if (parsed.length) out.push(...parsed);
-        else out.push(this.candidate({ source: 'apkmirror-source-url', url: target.url, error: `${target.method}: fetched but no Android TV release row/link parsed` }));
+        else out.push(this.candidate({ source: target.source || 'apkmirror-source-url', url: target.url, error: `${target.method}: fetched but no Android TV release row/link parsed` }));
       } catch (error) {
         out.push(this.candidate({ source: 'apkmirror-source-url', url: target.url, error: `${target.method}: ${error.message || 'fetch failed'}` }));
       }
@@ -404,18 +407,111 @@ class AndroidTvVersionProvider {
       'variant-%7B%22minapi_slug%22%3A%22minapi-28%22%7D/',
     ];
 
-    return variants.flatMap((variant, index) => {
+    return variants.slice(0, 1).flatMap((variant, index) => {
       const url = `${base}/${variant}`;
       const confidence = 0.94 - (index * 0.01);
       return [
-        { method: `direct-same-app-variant-${index + 1}`, url, confidence, kind: 'html', timeout: 7000 },
-        { method: `jina-reader-same-app-variant-${index + 1}`, url: `https://r.jina.ai/${url}`, confidence: Math.max(0.88, confidence - 0.02), kind: 'reader', timeout: 12000 },
+        { method: `direct-same-app-variant-${index + 1}`, url, confidence, kind: 'html', timeout: 3000 },
+        { method: `jina-reader-same-app-variant-${index + 1}`, url: `https://r.jina.ai/${url}`, confidence: Math.max(0.88, confidence - 0.02), kind: 'reader', timeout: 5000 },
       ];
     });
   }
 
 
+
+  sameDeveloperApkMirrorTargets(normalised) {
+    // Some APKMirror app pages (notably Android-TV-specific listing pages) are blocked
+    // from Render by security verification, while the developer page remains fetchable
+    // and lists the same Android TV upload next to the generic/mobile uploads. This
+    // target stays on the same developer slug only, and the normal parser still requires
+    // nearby Android TV evidence and rejects Fire TV/generic rows before selection.
+    if (!normalised || normalised.source_type !== 'apkmirror') return [];
+    if (!normalised.developer_slug) return [];
+    if (normalised.kind === 'developer') return [];
+    if (this.isFireTvContext(normalised.source_url)) return [];
+
+    const url = `https://www.apkmirror.com/apk/${normalised.developer_slug}/`;
+    return [
+      { method: 'direct-same-developer-page', url, confidence: 0.92, kind: 'html', timeout: 3500 },
+      { method: 'jina-reader-same-developer-page', url: `https://r.jina.ai/${url}`, confidence: 0.90, kind: 'reader', timeout: 5000 },
+    ];
+  }
+
+  samePackageApkPureFallbackTargets(normalised, packageName = '') {
+    // Tubi is a special case where APKMirror's Android TV page is often hidden behind
+    // bot/security verification from Render, while APKPure's version-history page stays
+    // fetchable and exposes both branches. This is not a fixed version: it parses the
+    // newest Tubi Android TV branch version at check time and ignores generic/mobile rows.
+    const pkg = String(packageName || '').trim().toLowerCase();
+    if (pkg !== 'com.tubitv') return [];
+    if (!normalised || normalised.source_type !== 'apkmirror') return [];
+    const isKnownTubiDeveloperPage = normalised.kind === 'developer' && normalised.developer_slug === 'tubi-tv';
+    if (!(normalised.source_has_tv_hint || isKnownTubiDeveloperPage) || this.isFireTvContext(normalised.source_url)) return [];
+
+    return [
+      {
+        method: 'apkpure-tubi-tv-branch-versions',
+        source: 'apkpure-package-versions-fallback',
+        url: 'https://apkpure.com/tubi-movies-tv-shows-android-app/com.tubitv/versions',
+        confidence: 0.79,
+        kind: 'apkpure-tv-branch',
+        timeout: 5000,
+      },
+      {
+        method: 'apkpure-net-tubi-tv-branch-versions',
+        source: 'apkpure-package-versions-fallback',
+        url: 'https://apkpure.net/tubi-movies-tv-shows-android-app/com.tubitv/versions',
+        confidence: 0.78,
+        kind: 'apkpure-tv-branch',
+        timeout: 5000,
+      },
+    ];
+  }
+
+  extractKnownTvBranchApkPureFallbackCandidates(text, normalised, target, packageName = '') {
+    const pkg = String(packageName || '').trim().toLowerCase();
+    if (pkg !== 'com.tubitv') return [];
+    const isKnownTubiDeveloperPage = normalised?.kind === 'developer' && normalised?.developer_slug === 'tubi-tv';
+    if (!(normalised?.source_has_tv_hint || isKnownTubiDeveloperPage) || this.isFireTvContext(normalised.source_url)) return [];
+
+    const raw = String(text || '');
+    const plain = this.toPlainText(raw).replace(/\s+/g, ' ').trim();
+    if (!/Tubi\s+TV/i.test(plain)) return [];
+
+    const out = [];
+    const seen = new Set();
+    const pattern = /Tubi\s+TV\s+([0-9]+\.[0-9]+\.5[0-9]{3,})(?:\s+([0-9]+(?:\.[0-9]+)?\s*MB))?(?:\s+([A-Za-z]{3,9}\s+\d{1,2},\s+20\d{2}))?/gi;
+    let match;
+    while ((match = pattern.exec(plain))) {
+      const version = this.cleanVersion(match[1]);
+      if (!this.isUsableVersion(version)) continue;
+      const sizeText = match[2] || '';
+      const dateText = match[3] || '';
+      const key = version;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(this.candidate({
+        source: 'apkpure-package-versions-fallback',
+        version,
+        version_code: '',
+        updated: dateText,
+        url: `https://apkpure.com/tubi-movies-tv-shows-android-app/com.tubitv/download/${version}`,
+        usable: true,
+        tv_confirmed: true,
+        confidence: target.confidence,
+        tv_evidence: `APKMirror Android TV source was blocked; APKPure's Tubi history exposes the Tubi TV branch version pattern x.y.5xxx${sizeText ? ` (${sizeText})` : ''}. Generic/mobile x.y.z rows are ignored.`,
+        note: `Parsed latest Tubi Android TV branch version from APKPure versions page via ${target.method}.`,
+      }));
+    }
+
+    return this.uniqueBy(out, c => `${c.source}:${c.version}:${c.url}`);
+  }
+
+
   sameAppPublicSearchTargets(normalised, meta = {}) {
+    // Disabled in 1.4.7 because general search pages can hang long enough for the 20i -> Render
+    // request to hit the 45 second outer timeout. Use bounded package/version pages instead.
+    return [];
     // When APKMirror blocks direct/reader access with its bot verification page,
     // use normal public search-result pages as a last resort. This is still tightly
     // scoped to the supplied APKMirror developer/app slug and the parser still requires
@@ -1137,7 +1233,7 @@ class AndroidTvVersionProvider {
 
   sourceDebug(candidates, normalised) {
     const versionsSeen = (candidates || [])
-      .filter(c => (c.source === 'apkmirror-source-url' || c.source === 'apkpure-tv-url') && c.version)
+      .filter(c => (c.source === 'apkmirror-source-url' || c.source === 'apkpure-tv-url' || c.source === 'apkpure-package-versions-fallback') && c.version)
       .map(c => ({ version: c.version, url: c.url, tv: c.tv_confirmed, note: c.note }))
       .slice(0, 20);
     return {
