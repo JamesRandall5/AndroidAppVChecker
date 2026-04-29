@@ -129,3 +129,8 @@ https://apkpure.com/crunchyroll/com.crunchyroll.crunchyroid/download/tv
 ```
 
 The resolver only accepts APKPure results when the page/source has Android TV evidence and the package name matches the supplied app. APKMirror remains supported for apps where its listing is readable and clean.
+
+
+## Android TV only / Google Play trusted mode
+
+The `/check-one` endpoint now accepts `trust_google_play_version`. When true and Google Play exposes a real semantic version, the service can return that Google Play version as the confirmed latest version. Use this only for packages that are known to be Android TV only, because it intentionally bypasses the normal requirement for APKMirror/APKPure Android TV evidence.

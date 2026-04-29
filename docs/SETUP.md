@@ -44,3 +44,8 @@ The resolver remains TV-safe: Android TV evidence is required, Fire TV is reject
 
 ## 1.3.9 notes
 This build fixes the parser regression that could select a date fragment such as `2025.3.14` as a version. It also reads `Latest:` lines on APKMirror variant pages, which is needed for apps such as Crunchyroll where the latest Android TV version is exposed in the variant table rather than the normal all-versions block returned to Render.
+
+
+## Android TV only / Google Play trusted mode
+
+The `/check-one` endpoint now accepts `trust_google_play_version`. When true and Google Play exposes a real semantic version, the service can return that Google Play version as the confirmed latest version. Use this only for packages that are known to be Android TV only, because it intentionally bypasses the normal requirement for APKMirror/APKPure Android TV evidence.

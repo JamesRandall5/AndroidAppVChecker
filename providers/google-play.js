@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.0';
+const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.1';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -22,7 +22,7 @@ class AndroidTvVersionProvider {
     return this.gplayModule;
   }
 
-  async lookup({ packageName, apkMirrorTvUrl, versionSourceUrl }) {
+  async lookup({ packageName, apkMirrorTvUrl, versionSourceUrl, trustGooglePlayVersion = false }) {
     const candidates = [];
     const notes = [];
     const meta = {
@@ -45,16 +45,21 @@ class AndroidTvVersionProvider {
       meta.updated = this.normaliseUpdated(app?.updated || app?.released || '');
       meta.url = String(app?.url || this.playUrl(packageName));
       const version = this.cleanVersion(app?.version || '');
+      const trustPlay = Boolean(trustGooglePlayVersion && this.isUsableVersion(version));
       return [this.candidate({
         source: 'google-play-scraper',
         version,
         updated: meta.updated,
         url: meta.url,
-        usable: false,
-        tv_confirmed: false,
-        note: this.isUsableVersion(version)
-          ? 'Google Play exposed a public version, but final selection still requires APKMirror Android TV evidence.'
-          : `Google Play version was "${version || 'blank'}". This is metadata only.`,
+        usable: trustPlay,
+        tv_confirmed: trustPlay,
+        confidence: trustPlay ? 0.88 : 0,
+        tv_evidence: trustPlay ? '20i app setting says this package is Android TV only, so the public Google Play version is trusted.' : '',
+        note: trustPlay
+          ? 'Google Play public version accepted because app is marked Android TV only in 20i.'
+          : (this.isUsableVersion(version)
+            ? 'Google Play exposed a public version, but final selection still requires Android TV evidence or the 20i Android TV only setting.'
+            : `Google Play version was "${version || 'blank'}". This is metadata only.`),
       })];
     });
 
@@ -62,6 +67,33 @@ class AndroidTvVersionProvider {
     try {
       normalised = this.normaliseVersionSourceUrl(versionSourceUrl || apkMirrorTvUrl);
     } catch (error) {
+      const playWinner = this.pickBestTvCandidate(candidates);
+      if (playWinner && playWinner.source === 'google-play-scraper') {
+        return {
+          ok: true,
+          status: 'confirmed_android_tv_version',
+          ...meta,
+          version: playWinner.version,
+          version_code: playWinner.version_code || '',
+          google_play_version: playWinner.version,
+          source: playWinner.source,
+          source_url: playWinner.url || meta.url,
+          apk_mirror_tv_url: '',
+          version_source_url: '',
+          confidence: playWinner.confidence,
+          tv_evidence: playWinner.tv_evidence,
+          selected_reason: 'Selected the Google Play public version because the app is marked Android TV only in 20i.',
+          warning: this.summary(candidates.filter(c => c !== playWinner), notes),
+          candidates,
+          source_debug: {
+            source_kind: 'google-play-trusted',
+            source_url: meta.url,
+            source_has_tv_hint: true,
+            top_versions_seen: [{ version: playWinner.version, url: playWinner.url, tv: true, note: playWinner.note }],
+            rejected_mobile_fire_tv_policy: 'Google Play accepted only because 20i says this package is Android TV only.',
+          },
+        };
+      }
       return this.failure(meta, candidates, notes, 'needs_source_setup', error.message || 'Version source URL required.', '');
     }
 
