@@ -6,7 +6,7 @@ const sharedSecret = String(process.env.CHECKER_SHARED_SECRET || '').trim();
 const gplayCountry = String(process.env.GPLAY_COUNTRY || 'gb').trim();
 const gplayLanguage = String(process.env.GPLAY_LANGUAGE || 'en').trim();
 const requestTimeoutMs = Number(process.env.REQUEST_TIMEOUT_MS || 30000);
-const buildVersion = 'android-tv-production-apkmirror-source-variant-safe-1.3.9';
+const buildVersion = 'android-tv-production-version-source-safe-1.4.0';
 
 if (!sharedSecret) {
   console.error('CHECKER_SHARED_SECRET is required');
@@ -39,9 +39,9 @@ app.get('/health', (req, res) => {
     provider_build: PROVIDER_BUILD,
     country: gplayCountry,
     language: gplayLanguage,
-    behaviour: 'Production service. Google Play metadata is collected, but the final version must come from confirmed APKMirror Android TV release rows or links from the source URL supplied by 20i. Developer-level and exact APKMirror variant/filter URLs are supported. No slow search fallback is used.',
+    behaviour: 'Production service. Google Play metadata is collected, but the final version must come from confirmed Android TV release rows or links from the version source URL supplied by 20i. APKMirror and APKPure Android TV source URLs are supported. No slow search fallback is used.',
     endpoints: {
-      check_one: 'POST /check-one { package_name, apkmirror_tv_url }',
+      check_one: 'POST /check-one { package_name, apkmirror_tv_url or version_source_url }',
     },
   });
 });
@@ -50,12 +50,13 @@ app.post('/check-one', requireBearer, async (req, res) => {
   try {
     const packageName = String(req.body.package_name || '').trim();
     const apkMirrorTvUrl = String(req.body.apkmirror_tv_url || '').trim();
+    const versionSourceUrl = String(req.body.version_source_url || '').trim();
 
     if (!packageName) {
       return res.status(400).json({ ok: false, error: 'package_name is required' });
     }
 
-    const result = await provider.lookup({ packageName, apkMirrorTvUrl });
+    const result = await provider.lookup({ packageName, apkMirrorTvUrl, versionSourceUrl });
 
     // Return 200 even for needs_review/needs_source_setup so the 20i page can show the full diagnostics.
     return res.status(200).json({ build: buildVersion, provider_build: PROVIDER_BUILD, ...result });

@@ -1,7 +1,8 @@
-const PROVIDER_BUILD = 'google-play-provider-production-apkmirror-source-variant-safe-1.3.9';
+const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.0';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
+const APKPURE_HOST_RE = /(^|\.)apkpure\.(?:com|net)$/i;
 const ANDROID_TV_RE = /android[\s-]*tv|\(\s*android\s*tv\s*\)/i;
 const FIRE_TV_RE = /fire[\s-]*tv|amazon\s*fire/i;
 
@@ -21,7 +22,7 @@ class AndroidTvVersionProvider {
     return this.gplayModule;
   }
 
-  async lookup({ packageName, apkMirrorTvUrl }) {
+  async lookup({ packageName, apkMirrorTvUrl, versionSourceUrl }) {
     const candidates = [];
     const notes = [];
     const meta = {
@@ -59,12 +60,18 @@ class AndroidTvVersionProvider {
 
     let normalised;
     try {
-      normalised = this.normaliseApkMirrorSourceUrl(apkMirrorTvUrl);
+      normalised = this.normaliseVersionSourceUrl(versionSourceUrl || apkMirrorTvUrl);
     } catch (error) {
-      return this.failure(meta, candidates, notes, 'needs_source_setup', error.message || 'APKMirror source URL required.', '');
+      return this.failure(meta, candidates, notes, 'needs_source_setup', error.message || 'Version source URL required.', '');
     }
 
-    await this.safeAdd(candidates, notes, 'apkmirror-source-url', () => this.lookupApkMirrorSource(normalised, meta));
+    if (normalised.source_type === 'apkmirror') {
+      await this.safeAdd(candidates, notes, 'apkmirror-source-url', () => this.lookupApkMirrorSource(normalised, meta));
+    } else if (normalised.source_type === 'apkpure') {
+      await this.safeAdd(candidates, notes, 'apkpure-tv-url', () => this.lookupApkPureSource(normalised, meta, packageName));
+    } else {
+      return this.failure(meta, candidates, notes, 'needs_source_setup', 'Unsupported version source URL.', normalised.source_url || '');
+    }
 
     const winner = this.pickBestTvCandidate(candidates);
     if (winner) {
@@ -78,9 +85,10 @@ class AndroidTvVersionProvider {
         source: winner.source,
         source_url: winner.url || normalised.source_url,
         apk_mirror_tv_url: normalised.source_url,
+        version_source_url: normalised.source_url,
         confidence: winner.confidence,
         tv_evidence: winner.tv_evidence,
-        selected_reason: 'Selected the highest confirmed Android TV version from the APKMirror source URL supplied by 20i. Fire-TV and generic/mobile rows were rejected.',
+        selected_reason: 'Selected the highest confirmed Android TV version from the version source URL supplied by 20i. Fire-TV and generic/mobile rows were rejected.',
         warning: this.summary(candidates.filter(c => c !== winner), notes),
         candidates,
         source_debug: this.sourceDebug(candidates, normalised),
@@ -92,7 +100,7 @@ class AndroidTvVersionProvider {
       candidates,
       notes,
       'needs_review',
-      'No confirmed Android TV version could be parsed from the supplied APKMirror source URL. Fire-TV and generic/mobile versions were not selected.',
+      'No confirmed Android TV version could be parsed from the supplied version source URL. Fire-TV and generic/mobile versions were not selected.',
       normalised.source_url,
       normalised
     );
@@ -132,6 +140,82 @@ class AndroidTvVersionProvider {
     }
 
     return out;
+  }
+
+  async lookupApkPureSource(normalised, meta = {}, packageName = '') {
+    const sourceUrl = normalised.source_url;
+    const alternateUrl = normalised.alternate_url || '';
+    const targets = [
+      { method: 'direct-source-url', url: sourceUrl, confidence: 0.96, kind: 'html', timeout: 7000 },
+      { method: 'jina-reader-source-url', url: `https://r.jina.ai/${sourceUrl}`, confidence: 0.94, kind: 'reader', timeout: 12000 },
+    ];
+    if (alternateUrl && alternateUrl !== sourceUrl) {
+      targets.push({ method: 'direct-alternate-url', url: alternateUrl, confidence: 0.93, kind: 'html', timeout: 7000 });
+      targets.push({ method: 'jina-reader-alternate-url', url: `https://r.jina.ai/${alternateUrl}`, confidence: 0.91, kind: 'reader', timeout: 12000 });
+    }
+
+    const out = [];
+    for (const target of targets) {
+      try {
+        const text = await this.fetchText(target.url, {
+          'User-Agent': PLAY_UA,
+          'Accept-Language': `${this.language}-${this.country.toUpperCase()},${this.language};q=0.9`,
+          Accept: target.kind === 'reader'
+            ? 'text/plain,*/*;q=0.8'
+            : 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain,*/*;q=0.8',
+          Referer: 'https://www.google.com/',
+        }, target.timeout);
+        const parsed = this.extractApkPureTvCandidates(text, normalised, target, meta, packageName);
+        if (parsed.length) { out.push(...parsed); return out; }
+        else out.push(this.candidate({ source: 'apkpure-tv-url', url: target.url, error: `${target.method}: fetched but no Android TV version parsed` }));
+      } catch (error) {
+        out.push(this.candidate({ source: 'apkpure-tv-url', url: target.url, error: `${target.method}: ${error.message || 'fetch failed'}` }));
+      }
+    }
+    return out;
+  }
+
+  extractApkPureTvCandidates(text, normalised, target, meta = {}, packageName = '') {
+    const raw = String(text || '');
+    const plain = this.toPlainText(raw).replace(/\s+/g, ' ').trim();
+    const out = [];
+    const seen = new Set();
+    const packageOk = !packageName || plain.includes(packageName) || normalised.source_url.includes(packageName);
+    const tvOk = normalised.source_has_tv_hint || /for\s+Android\s+TV|Android\s+TV/i.test(plain);
+    if (!packageOk || !tvOk || this.isFireTvContext(plain)) return out;
+
+    const patterns = [
+      /What'?s\s+New\s+in\s+the\s+Latest\s+Version\s+([0-9]+(?:\.[0-9]+){1,5}(?:[-+](?:rc|beta|alpha)\d*)?)(?:\s*\((\d{2,})\))?/gi,
+      /Download\s+APK\s+([0-9]+(?:\.[0-9]+){1,5}(?:[-+](?:rc|beta|alpha)\d*)?)(?:\s*\((\d{2,})\))?/gi,
+      /\bVersion\s+([0-9]+(?:\.[0-9]+){1,5}(?:[-+](?:rc|beta|alpha)\d*)?)(?:\s*\((\d{2,})\))?/gi,
+      /\b([0-9]+(?:\.[0-9]+){1,5}(?:[-+](?:rc|beta|alpha)\d*)?)\s*\((\d{2,})\)\s+(?:XAPK|APK|APKs|APK\s+Bundle)/gi,
+      /Latest\s+Version\s+([0-9]+(?:\.[0-9]+){1,5}(?:[-+](?:rc|beta|alpha)\d*)?)/gi,
+    ];
+
+    for (const pattern of patterns) {
+      let match;
+      while ((match = pattern.exec(plain))) {
+        const version = this.cleanVersion(match[1]);
+        const version_code = match[2] || '';
+        if (!this.isUsableVersion(version)) continue;
+        const key = `${version}:${version_code}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(this.candidate({
+          source: 'apkpure-tv-url',
+          version,
+          version_code,
+          updated: this.updatedFromText(plain),
+          url: target.url,
+          usable: true,
+          tv_confirmed: true,
+          confidence: target.confidence,
+          tv_evidence: `APKPure TV page contains Android TV evidence and matching package/source (${target.method}).`,
+          note: `Parsed APKPure Android TV version via ${target.method}.`,
+        }));
+      }
+    }
+    return this.uniqueBy(out, c => `${c.version}:${c.version_code}:${c.url}`);
   }
 
   extractTvCandidates(text, normalised, target, meta = {}) {
@@ -261,12 +345,51 @@ class AndroidTvVersionProvider {
     return this.uniqueBy(out, item => item.absolute_url);
   }
 
+  normaliseVersionSourceUrl(input) {
+    const raw = String(input || '').trim();
+    if (!raw) throw new Error('Version source URL is required for TV-safe checking.');
+    let url;
+    try { url = new URL(raw); } catch (_) { throw new Error('Version source URL is not a valid URL.'); }
+    if (APKMIRROR_HOST_RE.test(url.hostname)) return this.normaliseApkMirrorSourceUrl(raw);
+    if (APKPURE_HOST_RE.test(url.hostname)) return this.normaliseApkPureSourceUrl(raw);
+    throw new Error('Version source URL must be on apkmirror.com, apkpure.com, or apkpure.net.');
+  }
+
+  normaliseApkPureSourceUrl(input) {
+    const raw = String(input || '').trim();
+    let url;
+    try { url = new URL(raw); } catch (_) { throw new Error('APKPure source URL is not a valid URL.'); }
+    if (!APKPURE_HOST_RE.test(url.hostname)) throw new Error('APKPure source URL must be on apkpure.com or apkpure.net.');
+    const sourceUrl = `https://${url.hostname}${url.pathname}${url.search || ''}`;
+    const altHost = url.hostname.endsWith('.com') || url.hostname === 'apkpure.com'
+      ? url.hostname.replace(/apkpure\.com$/i, 'apkpure.net')
+      : url.hostname.replace(/apkpure\.net$/i, 'apkpure.com');
+    const alternateUrl = `https://${altHost}${url.pathname}${url.search || ''}`;
+    const parts = url.pathname.split('/').filter(Boolean);
+    const packageFromPath = parts.find(part => /^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$/i.test(part)) || '';
+    const isTvDownload = /\/download\/tv\/?$/i.test(url.pathname) || url.pathname.toLowerCase().includes('/download/tv');
+    return {
+      source_type: 'apkpure',
+      kind: isTvDownload ? 'apkpure-tv-download' : 'apkpure',
+      source_url: sourceUrl,
+      alternate_url: alternateUrl,
+      developer_slug: '',
+      app_slug: parts[0] || '',
+      release_slug: '',
+      package_from_path: packageFromPath,
+      original_url: raw,
+      is_variant_url: false,
+      is_release_url: false,
+      source_has_tv_hint: isTvDownload || /android[-\s]*tv/i.test(sourceUrl),
+    };
+  }
+
   normaliseApkMirrorSourceUrl(input) {
     const raw = String(input || '').trim();
     if (!raw) throw new Error('APKMirror source URL is required for TV-safe checking.');
     let url;
     try { url = new URL(raw); } catch (_) { throw new Error('APKMirror source URL is not a valid URL.'); }
-    if (!APKMIRROR_HOST_RE.test(url.hostname)) throw new Error('APKMirror source URL must be on apkmirror.com.');
+    if (!APKMIRROR_HOST_RE.test(url.hostname)) throw new Error('Version source URL must be on apkmirror.com.');
 
     const parts = url.pathname.split('/').filter(Boolean);
 
@@ -274,6 +397,7 @@ class AndroidTvVersionProvider {
     if (parts[0] === 'uploads') {
       const category = String(url.searchParams.get('appcategory') || '').trim();
       return {
+        source_type: 'apkmirror',
         kind: 'uploads',
         listing_url: `https://www.apkmirror.com/uploads/?appcategory=${encodeURIComponent(category)}`,
         source_url: `https://www.apkmirror.com/uploads/${url.search || ''}`,
@@ -288,7 +412,7 @@ class AndroidTvVersionProvider {
     }
 
     if (parts[0] !== 'apk' || parts.length < 2) {
-      throw new Error('APKMirror source URL must be under /apk/{developer}/, /apk/{developer}/{app}/, or /uploads/?appcategory=...');
+      throw new Error('Version source URL must be under /apk/{developer}/, /apk/{developer}/{app}/, or /uploads/?appcategory=...');
     }
 
     const developerSlug = parts[1];
@@ -298,6 +422,7 @@ class AndroidTvVersionProvider {
     const sourceUrl = `https://www.apkmirror.com${cleanPath}${url.search || ''}`;
     const lowerSource = sourceUrl.toLowerCase();
     return {
+      source_type: 'apkmirror',
       kind: appSlug ? (/^variant-/i.test(releaseSlug) || /variant/i.test(url.search) ? 'variant' : (releaseSlug ? 'release' : 'app')) : 'developer',
       listing_url: appSlug ? `https://www.apkmirror.com/apk/${developerSlug}/${appSlug}/` : `https://www.apkmirror.com/apk/${developerSlug}/`,
       source_url: sourceUrl,
@@ -677,7 +802,7 @@ class AndroidTvVersionProvider {
 
   sourceDebug(candidates, normalised) {
     const versionsSeen = (candidates || [])
-      .filter(c => c.source === 'apkmirror-source-url' && c.version)
+      .filter(c => (c.source === 'apkmirror-source-url' || c.source === 'apkpure-tv-url') && c.version)
       .map(c => ({ version: c.version, url: c.url, tv: c.tv_confirmed, note: c.note }))
       .slice(0, 20);
     return {

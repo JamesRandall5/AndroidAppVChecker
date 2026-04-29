@@ -117,3 +117,15 @@ The resolver remains TV-safe: Android TV evidence is required, Fire TV is reject
 - Adds parsing for APKMirror variant/listing text such as `Latest: 3.61.0 on ...`.
 - Supports versions with rc/beta/alpha suffixes, e.g. `26.6.0-rc5`.
 - Keeps the Android TV only / no Fire TV / no mobile fallback rule.
+
+## 1.4.0
+
+Adds support for APKPure Android TV download pages as version sources. The 20i field can now contain either an APKMirror Android TV source URL or an APKPure TV download URL.
+
+Example APKPure TV source:
+
+```text
+https://apkpure.com/crunchyroll/com.crunchyroll.crunchyroid/download/tv
+```
+
+The resolver only accepts APKPure results when the page/source has Android TV evidence and the package name matches the supplied app. APKMirror remains supported for apps where its listing is readable and clean.
