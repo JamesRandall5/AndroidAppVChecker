@@ -1,8 +1,8 @@
 {
   "name": "android-tv-version-checker-render",
-  "version": "1.4.9",
+  "version": "1.4.11",
   "private": true,
-  "description": "Render service for checking confirmed Android TV app versions using Google Play metadata, a supplied APKMirror/APKPure source URL, or an explicit 20i Android TV-only Google Play trust flag.",
+  "description": "Render service for checking confirmed Android TV app versions using Google Play metadata, a supplied APKMirror/APKPure/APKFab source URL, or an explicit 20i Android TV-only Google Play trust flag.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

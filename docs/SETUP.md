@@ -53,3 +53,8 @@ The `/check-one` endpoint now accepts `trust_google_play_version`. When true and
 ## 1.4.9 Tubi APKPure fallback
 
 This is a Render-only change. For `com.tubitv`, the service can use APKPure's version-history page without requiring Android TV text. It accepts only the Tubi TV branch pattern `x.y.5xxx` and ignores the generic/mobile `x.y.z` branch.
+
+
+## 1.4.11 APKFab support
+
+Render now accepts APKFab version-history URLs such as `https://apkfab.com/tubi-free-movies-tv-shows/com.tubitv/versions`. For normal apps, APKFab remains TV-safe and only confirms a version when the APKFab source is TV-scoped. For Tubi (`com.tubitv`), APKFab does not label the Android TV branch, so the checker uses a controlled package-specific rule that accepts only `x.y.5xxx` rows and skips newer mobile `x.y.z` rows.

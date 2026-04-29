@@ -159,3 +159,17 @@ The `/check-one` endpoint now accepts `trust_google_play_version`. When true and
 - Moves the Tubi-specific APKPure version-history fallback before APKMirror page fetches, so Tubi checks do not wait on APKMirror security-verification pages first.
 - The Tubi fallback intentionally does not require `Android TV` text from APKPure, because APKPure's Tubi history does not separate that label. It only accepts the Tubi TV branch pattern `x.y.5xxx` and ignores generic/mobile versions such as `x.y.z`.
 - Supports using the APKPure Tubi versions page directly as the version source as well as using it as a fallback from APKMirror.
+
+
+## 1.4.10
+
+- Render-only update. No 20i/admin GUI changes are required.
+- Keeps the Tubi-only APKPure fallback, but no longer relies only on the direct APKPure "/versions" page because Render can receive HTTP 403 from that URL.
+- Adds bounded fallback checks for APKPure's old-version article/index text and one short Bing RSS index lookup, then applies the same Tubi branch rule.
+- The Tubi rule still does not require "Android TV" text from APKPure. It accepts only x.y.5xxx branch versions and ignores generic/mobile x.y.z versions.
+- Fallback requests use short per-target timeouts so the 20i request should receive JSON instead of hanging until the 45-second outer timeout.
+
+
+## 1.4.11 APKFab support
+
+Render now accepts APKFab version-history URLs such as `https://apkfab.com/tubi-free-movies-tv-shows/com.tubitv/versions`. For normal apps, APKFab remains TV-safe and only confirms a version when the APKFab source is TV-scoped. For Tubi (`com.tubitv`), APKFab does not label the Android TV branch, so the checker uses a controlled package-specific rule that accepts only `x.y.5xxx` rows and skips newer mobile `x.y.z` rows.
