@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.4';
+const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.6';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -148,15 +148,23 @@ class AndroidTvVersionProvider {
     // We do not crawl broadly. For APKMirror app listing URLs that already contain an Android TV hint,
     // we may also fetch same-app variant filter pages because they often expose the release rows.
     const sourceUrl = normalised.source_url;
+    const out = [];
+
+    const exactSourceCandidate = this.candidateFromExactApkMirrorSourceUrl(normalised);
+    if (exactSourceCandidate) out.push(exactSourceCandidate);
+
     const targets = [
       { method: 'direct-source-url', url: sourceUrl, confidence: 0.99, kind: 'html', timeout: 6000 },
       { method: 'jina-reader-source-url', url: `https://r.jina.ai/${sourceUrl}`, confidence: 0.97, kind: 'reader', timeout: 12000 },
       ...this.sameAppApkMirrorVariantTargets(normalised),
-      ...this.sameAppJinaSearchTargets(normalised, meta),
+      ...this.sameAppPublicSearchTargets(normalised, meta),
     ];
-    const out = [];
 
     for (const target of targets) {
+      // Public search fallbacks are only needed until one confirmed Android TV
+      // version is found. This avoids extra slow/block-prone requests and keeps
+      // existing direct APKMirror/APKPure behaviour unchanged for apps that work.
+      if (target.kind === 'search' && this.hasUsableTvCandidate(out)) break;
       try {
         const text = await this.fetchText(target.url, {
           'User-Agent': PLAY_UA,
@@ -263,6 +271,10 @@ class AndroidTvVersionProvider {
     const out = [];
     const seen = new Set();
 
+    if (target.kind === 'search') {
+      return this.extractSearchResultCandidates(body, normalised, target, meta);
+    }
+
     // 1) Strongest signal: APKMirror release URLs. These are safer than generic text because
     //    the app/release slug itself can prove Android TV and provides the version.
     for (const item of this.extractReleaseUrls(body, normalised)) {
@@ -353,6 +365,26 @@ class AndroidTvVersionProvider {
   }
 
 
+  candidateFromExactApkMirrorSourceUrl(normalised) {
+    if (!normalised || normalised.source_type !== 'apkmirror') return null;
+    if (!normalised.is_release_url || !normalised.source_has_tv_hint) return null;
+    if (this.isFireTvContext(normalised.source_url)) return null;
+    const info = this.versionFromReleaseSlug(normalised.release_slug, normalised.app_slug || '');
+    if (!this.isUsableVersion(info.version)) return null;
+    return this.candidate({
+      source: 'apkmirror-source-url',
+      version: info.version,
+      version_code: info.version_code || '',
+      updated: '',
+      url: normalised.source_url,
+      usable: true,
+      tv_confirmed: true,
+      confidence: 0.99,
+      tv_evidence: 'The supplied APKMirror source URL is an exact Android TV release URL, so the version was parsed from the URL slug without fetching the blocked page.',
+      note: 'Parsed exact APKMirror Android TV release URL without page fetch.',
+    });
+  }
+
   sameAppApkMirrorVariantTargets(normalised) {
     // APKMirror's plain app listing can be very thin via 403/Jina, while the same-app
     // variant filter pages often expose the actual Android TV rows. This is still
@@ -383,23 +415,197 @@ class AndroidTvVersionProvider {
   }
 
 
-  sameAppJinaSearchTargets(normalised, meta = {}) {
+  sameAppPublicSearchTargets(normalised, meta = {}) {
     // When APKMirror blocks direct/reader access with its bot verification page,
-    // the exact rows can still be visible in public search indexes. Keep this
-    // tightly scoped to the supplied APKMirror developer/app slug and require
-    // Android TV evidence before accepting any version.
+    // use normal public search-result pages as a last resort. This is still tightly
+    // scoped to the supplied APKMirror developer/app slug and the parser still requires
+    // Android TV evidence before accepting any version. No API key is required.
     if (!normalised || normalised.source_type !== 'apkmirror') return [];
     if (!normalised.developer_slug || !normalised.app_slug) return [];
     if (!normalised.source_has_tv_hint || this.isFireTvContext(normalised.source_url)) return [];
     if (!(normalised.kind === 'app' || normalised.kind === 'release' || normalised.kind === 'variant')) return [];
 
     const title = this.searchSafeTitle(meta.title || normalised.app_slug.replace(/-/g, ' '));
-    const scopedPath = `site:apkmirror.com/apk/${normalised.developer_slug}/${normalised.app_slug}`;
-    const query = [scopedPath, title ? `"${title}"` : '', '"Android TV"', 'APKMirror'].filter(Boolean).join(' ');
-    const url = `https://s.jina.ai/?q=${encodeURIComponent(query)}`;
-    return [
-      { method: 'jina-search-same-app-android-tv', url, confidence: 0.86, kind: 'search', timeout: 15000 },
-    ];
+    const appSlugs = [normalised.app_slug];
+    // APKMirror often has both a generic app listing and an Android-TV-specific app listing.
+    // For pages like /tubi-free-movies-live-tv-android-tv/, the generic sibling page is
+    // sometimes the page indexed by public search. We only use this for search snippets,
+    // and the final parser still requires nearby Android TV evidence, so generic/mobile
+    // rows are not accepted just because the sibling page is searched.
+    if (/-android-tv$/i.test(normalised.app_slug)) {
+      appSlugs.push(normalised.app_slug.replace(/-android-tv$/i, ''));
+    }
+
+    const queries = [];
+    for (const appSlug of this.uniqueBy(appSlugs, v => v)) {
+      const scopedPath = `site:apkmirror.com/apk/${normalised.developer_slug}/${appSlug}`;
+      queries.push([scopedPath, title ? `"${title}"` : '', '"Android TV"', 'APKMirror'].filter(Boolean).join(' '));
+      queries.push([scopedPath, '"Android TV"', '"Version:"', 'APKMirror'].filter(Boolean).join(' '));
+      queries.push([scopedPath, `${normalised.app_slug}-`, 'release', '"Android TV"'].filter(Boolean).join(' '));
+    }
+
+    const enginesForQuery = (query, qIndex) => {
+      const encoded = encodeURIComponent(query);
+      const rankPenalty = qIndex * 0.015;
+      return [
+        { method: `bing-rss-same-app-android-tv-${qIndex + 1}`, url: `https://www.bing.com/search?q=${encoded}&format=rss`, confidence: 0.855 - rankPenalty, kind: 'search', timeout: 15000 },
+        { method: `duckduckgo-lite-same-app-android-tv-${qIndex + 1}`, url: `https://lite.duckduckgo.com/lite/?q=${encoded}`, confidence: 0.845 - rankPenalty, kind: 'search', timeout: 15000 },
+        { method: `duckduckgo-html-same-app-android-tv-${qIndex + 1}`, url: `https://html.duckduckgo.com/html/?q=${encoded}`, confidence: 0.835 - rankPenalty, kind: 'search', timeout: 15000 },
+        { method: `bing-html-same-app-android-tv-${qIndex + 1}`, url: `https://www.bing.com/search?q=${encoded}`, confidence: 0.825 - rankPenalty, kind: 'search', timeout: 15000 },
+        { method: `jina-reader-bing-same-app-android-tv-${qIndex + 1}`, url: `https://r.jina.ai/https://www.bing.com/search?q=${encoded}`, confidence: 0.815 - rankPenalty, kind: 'search', timeout: 15000 },
+      ];
+    };
+
+    // Keep this bounded: at most the first four focused queries, and stop in the
+    // caller as soon as any confirmed Android TV candidate is found.
+    return this.uniqueBy(queries, q => q).slice(0, 4).flatMap(enginesForQuery);
+  }
+
+  extractSearchResultCandidates(text, normalised, target, meta = {}) {
+    const expanded = this.decodeSearchResultText(text);
+    const expandedLinks = expanded.replace(/href=([\"'])([^\"']+)\1/gi, (full, quote, href) => full + ' ' + href + ' ');
+    const plain = this.toPlainText(expanded).replace(/\s+/g, ' ').trim();
+    const out = [];
+    const seen = new Set();
+
+    for (const item of this.extractReleaseUrls(expandedLinks, normalised)) {
+      const combined = `${item.absolute_url} ${item.app_slug} ${item.release_slug} ${item.raw}`;
+      if (!this.isConfirmedAndroidTvContext(combined)) continue;
+      if (this.isFireTvContext(combined)) continue;
+      if (!this.sourceScopeAllowsRelease(item, normalised, meta)) continue;
+
+      const info = this.versionFromReleaseSlug(item.release_slug, item.app_slug);
+      if (!this.isUsableVersion(info.version)) continue;
+      const key = `url:${info.version}:${info.version_code || ''}:${item.absolute_url}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(this.candidate({
+        source: 'apkmirror-source-url',
+        version: info.version,
+        version_code: info.version_code || '',
+        updated: this.updatedFromText(plain),
+        url: item.absolute_url,
+        usable: true,
+        tv_confirmed: true,
+        confidence: target.confidence,
+        tv_evidence: `Public search result contains a same-app APKMirror Android TV release URL (${target.method}).`,
+        note: `Parsed APKMirror Android TV version from public search result via ${target.method}.`,
+      }));
+    }
+
+    // Some search result pages expose the APKMirror title/snippet but hide the URL behind
+    // redirect parameters. Accept only same-app, Android TV adjacent title/snippet text.
+    const chunks = plain
+      .split(/(?:\r?\n|(?=Download\s)|(?=APKMirror\s)|(?=https?:\/\/www\.apkmirror\.com)|(?=Result\s)|(?=Version:)|(?=Uploaded:)|(?=File size:))/i)
+      .map(v => v.trim())
+      .filter(Boolean);
+    const candidatesToCheck = chunks.length ? chunks : [plain];
+    for (const chunk of candidatesToCheck) {
+      if (!this.isConfirmedAndroidTvContext(chunk)) continue;
+      if (this.isFireTvContext(chunk)) continue;
+      if (this.isApkMirrorNoiseChunk(chunk)) continue;
+      if (!this.textScopeAllowsChunk(chunk, normalised, meta)) continue;
+      const info = this.versionFromAndroidTvLine(chunk);
+      if (!this.isUsableVersion(info.version)) continue;
+      const key = `text:${info.version}:${info.version_code || ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(this.candidate({
+        source: 'apkmirror-source-url',
+        version: info.version,
+        version_code: info.version_code || '',
+        updated: this.updatedFromText(chunk),
+        url: normalised.source_url,
+        usable: true,
+        tv_confirmed: true,
+        confidence: Math.min(target.confidence, 0.80),
+        tv_evidence: `Public search result title/snippet contains same-app Android TV and a semantic version (${target.method}).`,
+        note: `Parsed APKMirror Android TV version from public search text via ${target.method}.`,
+      }));
+    }
+
+    // Search pages sometimes show only the release slug/path text rather than a clean link,
+    // especially in RSS snippets or redirect-heavy result pages. Parse that only when it is
+    // the same Android-TV app slug and Android TV evidence is nearby.
+    for (const item of this.extractSameAppReleaseSlugMentions(expandedLinks + ' ' + plain, normalised)) {
+      const combined = `${item.release_slug} ${item.context}`;
+      if (!this.isConfirmedAndroidTvContext(combined)) continue;
+      if (this.isFireTvContext(combined)) continue;
+      const info = this.versionFromReleaseSlug(item.release_slug, normalised.app_slug);
+      if (!this.isUsableVersion(info.version)) continue;
+      const key = `slug:${info.version}:${info.version_code || ''}:${item.url}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(this.candidate({
+        source: 'apkmirror-source-url',
+        version: info.version,
+        version_code: info.version_code || '',
+        updated: this.updatedFromText(item.context),
+        url: item.url,
+        usable: true,
+        tv_confirmed: true,
+        confidence: Math.min(target.confidence, 0.81),
+        tv_evidence: `Public search result contains the same-app Android TV APKMirror release slug (${target.method}).`,
+        note: `Parsed APKMirror Android TV release slug from public search text via ${target.method}.`,
+      }));
+    }
+
+    return this.uniqueBy(out, c => `${c.version}:${c.version_code}:${c.url}`);
+  }
+
+  decodeSearchResultText(text) {
+    let out = this.decodeHtml(String(text || ''));
+    const safeDecode = value => {
+      try { return decodeURIComponent(String(value || '').replace(/\+/g, ' ')); } catch (_) { return String(value || ''); }
+    };
+    const decodeBingUrlParam = value => {
+      const raw = String(value || '');
+      const decoded = safeDecode(raw);
+      const maybe = decoded.startsWith('a1') ? decoded.slice(2) : decoded;
+      if (!/^[A-Za-z0-9_-]{20,}={0,2}$/.test(maybe)) return decoded;
+      try {
+        const padded = maybe.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(maybe.length / 4) * 4, '=');
+        const asText = Buffer.from(padded, 'base64').toString('utf8');
+        return /^https?:\/\//i.test(asText) ? asText : decoded;
+      } catch (_) {
+        return decoded;
+      }
+    };
+    const decodeUrlParam = encoded => {
+      const decoded = safeDecode(encoded);
+      const bingDecoded = decodeBingUrlParam(decoded);
+      return /^https?:\/\//i.test(bingDecoded) ? bingDecoded : decoded;
+    };
+    for (let i = 0; i < 4; i += 1) {
+      out = out.replace(/(?:uddg|u|url|q)=([^&"'<>\s]+)/gi, (_, encoded) => decodeUrlParam(encoded));
+      out = out.replace(/https%3A%2F%2Fwww\.apkmirror\.com[^"'<>\s&]*/gi, match => safeDecode(match));
+      out = out.replace(/https%253A%252F%252Fwww\.apkmirror\.com[^"'<>\s&]*/gi, match => safeDecode(safeDecode(match)));
+      out = this.decodeHtml(out);
+    }
+    return out;
+  }
+
+  extractSameAppReleaseSlugMentions(text, normalised) {
+    const out = [];
+    if (!normalised || !normalised.app_slug || !normalised.developer_slug) return out;
+    const app = this.escapeRegex(normalised.app_slug);
+    const pattern = new RegExp(`${app}-(\\d+(?:[-.]\\d+){1,5}(?:(?:rc|beta|alpha)\\d*)?)-release`, 'gi');
+    let match;
+    const source = String(text || '');
+    while ((match = pattern.exec(source))) {
+      const releaseSlug = `${normalised.app_slug}-${String(match[1]).replace(/\./g, '-')}-release`;
+      const context = this.contextAround(source, match[0], 500) || match[0];
+      out.push({
+        release_slug: releaseSlug,
+        context,
+        url: `https://www.apkmirror.com/apk/${normalised.developer_slug}/${normalised.app_slug}/${releaseSlug}/`,
+      });
+    }
+    return this.uniqueBy(out, item => item.url);
+  }
+
+  escapeRegex(value) {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   searchSafeTitle(value) {
@@ -699,6 +905,10 @@ class AndroidTvVersionProvider {
 
   isFireTvContext(text) {
     return FIRE_TV_RE.test(String(text || ''));
+  }
+
+  hasUsableTvCandidate(candidates) {
+    return (candidates || []).some(c => c && c.usable && c.tv_confirmed && this.isUsableVersion(c.version) && !this.isFireTvContext(c.url));
   }
 
   pickBestTvCandidate(candidates) {

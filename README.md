@@ -136,8 +136,10 @@ The resolver only accepts APKPure results when the page/source has Android TV ev
 The `/check-one` endpoint now accepts `trust_google_play_version`. When true and Google Play exposes a real semantic version, the service can return that Google Play version as the confirmed latest version. Use this only for packages that are known to be Android TV only, because it intentionally bypasses the normal requirement for APKMirror/APKPure Android TV evidence.
 
 
-## 1.4.4
+## 1.4.6
 
-- Fixes APKMirror/Jina reader parsing for Android TV app pages where the readable text contains a title/version such as `(Android TV) 10.12.5000` but does not repeat the APKMirror URL slug beside it.
-- Adds same-app APKMirror variant-page fallbacks for Android TV app-listing URLs, so pages like Tubi can still resolve when the main listing is 403 or too thin via Jina.
-- Keeps the existing TV-safe rules: Android TV evidence is still required, Fire TV is still rejected, and generic/mobile rows are still not selected.
+- Keeps the existing provider order and TV-safe rules, but improves the final APKMirror-blocked fallback path.
+- When APKMirror returns HTTP 403 or a security verification page, the service now tries bounded public search-result pages only after direct/reader/variant APKMirror attempts fail.
+- Adds Bing RSS, improved Bing/DDG redirect decoding, and Android-TV-specific release-slug parsing so indexed results such as `tubi-free-movies-live-tv-android-tv-10-15-5001-release` can be used without fetching the blocked APKMirror release page.
+- Adds generic-sibling APKMirror search scoping for apps whose TV page is blocked but whose generic app listing indexes Android TV rows, while still rejecting generic/mobile versions unless the snippet/title has adjacent Android TV evidence.
+- Stops fetching additional public-search fallbacks as soon as one confirmed Android TV candidate has been found, keeping checks bounded.
