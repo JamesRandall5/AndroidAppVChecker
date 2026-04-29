@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.2';
+const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.3';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -145,11 +145,13 @@ class AndroidTvVersionProvider {
     //   /apk/{developer}/{app}/                Android TV app listing page
     //   /apk/{developer}/{app}/{release}/      specific Android TV release page
     //   /uploads/?appcategory=...              APKMirror uploads category page
-    // We do not crawl away from this source. We only parse Android TV release links/rows on the fetched page.
+    // We do not crawl broadly. For APKMirror app listing URLs that already contain an Android TV hint,
+    // we may also fetch same-app variant filter pages because they often expose the release rows.
     const sourceUrl = normalised.source_url;
     const targets = [
       { method: 'direct-source-url', url: sourceUrl, confidence: 0.99, kind: 'html', timeout: 6000 },
       { method: 'jina-reader-source-url', url: `https://r.jina.ai/${sourceUrl}`, confidence: 0.97, kind: 'reader', timeout: 12000 },
+      ...this.sameAppApkMirrorVariantTargets(normalised),
     ];
     const out = [];
 
@@ -343,6 +345,36 @@ class AndroidTvVersionProvider {
     }
 
     return this.uniqueBy(out, c => `${c.source}:${c.version}:${c.version_code}:${c.url}`);
+  }
+
+
+  sameAppApkMirrorVariantTargets(normalised) {
+    // APKMirror's plain app listing can be very thin via 403/Jina, while the same-app
+    // variant filter pages often expose the actual Android TV rows. This is still
+    // bounded to the supplied developer/app slug; it does not search APKMirror globally
+    // and it does not relax the final Android TV / Fire TV checks.
+    if (!normalised || normalised.source_type !== 'apkmirror') return [];
+    if (normalised.kind !== 'app' || !normalised.developer_slug || !normalised.app_slug) return [];
+    if (!normalised.source_has_tv_hint || this.isFireTvContext(normalised.source_url)) return [];
+
+    const base = `https://www.apkmirror.com/apk/${normalised.developer_slug}/${normalised.app_slug}`;
+    const variants = [
+      // Common Android TV universal/dual-arch listing. This is the one used by many
+      // TV apps, including Tubi's Android TV page.
+      'variant-%7B%22arches_slug%22%3A%5B%22arm64-v8a%22%2C%22armeabi-v7a%22%5D%7D/',
+      // Some APKMirror app pages expose useful rows by DPI or min API instead of arch.
+      'variant-%7B%22dpis_slug%22%3A%5B%22320%22%5D%7D/',
+      'variant-%7B%22minapi_slug%22%3A%22minapi-28%22%7D/',
+    ];
+
+    return variants.flatMap((variant, index) => {
+      const url = `${base}/${variant}`;
+      const confidence = 0.94 - (index * 0.01);
+      return [
+        { method: `direct-same-app-variant-${index + 1}`, url, confidence, kind: 'html', timeout: 7000 },
+        { method: `jina-reader-same-app-variant-${index + 1}`, url: `https://r.jina.ai/${url}`, confidence: Math.max(0.88, confidence - 0.02), kind: 'reader', timeout: 12000 },
+      ];
+    });
   }
 
   extractReleaseUrls(text, normalised) {
