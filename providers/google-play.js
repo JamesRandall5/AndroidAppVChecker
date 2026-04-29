@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.1';
+const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.2';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -319,6 +319,7 @@ class AndroidTvVersionProvider {
       const chunk = lines.slice(Math.max(0, i - 2), Math.min(lines.length, i + 5)).join(' ');
       if (!this.isConfirmedAndroidTvContext(chunk)) continue;
       if (this.isFireTvContext(chunk)) continue;
+      if (this.isApkMirrorNoiseChunk(chunk)) continue;
       if (!this.textScopeAllowsChunk(chunk, normalised, meta)) continue;
 
       const info = this.versionFromAndroidTvLine(chunk);
@@ -497,6 +498,23 @@ class AndroidTvVersionProvider {
   }
 
   textScopeAllowsChunk(chunk, normalised, meta = {}) {
+    const text = String(chunk || '');
+
+    // APKMirror/Jina reader pages sometimes expose the app title and version as plain
+    // text, for example: "Tubi: Free Movies & Live TV (Android TV) 10.12.5000".
+    // In that format the human title is present but the APKMirror slug is not, so the
+    // old slug-only scope check rejected valid Android TV app pages. This keeps the
+    // TV-safe rule intact: the supplied source URL must already be Android TV scoped,
+    // the chunk itself must say Android TV next to a real version, and Fire TV is still
+    // rejected before any final candidate can be selected.
+    if ((normalised.kind === 'app' || normalised.kind === 'release') && normalised.source_has_tv_hint) {
+      const hasAdjacentTvVersion = this.isConfirmedAndroidTvContext(text)
+        && /(?:\(\s*Android\s*TV\s*\)|Android\s*TV)[^0-9]{0,160}[0-9]+(?:\.[0-9]+){1,5}/i.test(text)
+        && !this.isFireTvContext(text)
+        && !this.isApkMirrorNoiseChunk(text);
+      if (hasAdjacentTvVersion) return true;
+    }
+
     if (normalised.kind === 'app' || normalised.kind === 'release') return this.lineBelongsToListing(chunk, normalised.app_slug);
     if (normalised.kind === 'uploads') return !normalised.app_slug || this.lineBelongsToListing(chunk, normalised.app_slug);
     if (normalised.kind === 'developer') {
@@ -577,6 +595,10 @@ class AndroidTvVersionProvider {
     const explicit = text.match(/\bVersion\s*:?\s*([0-9]+(?:\.[0-9]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:\s*\((\d{2,})\)|\s+build\s+(\d{2,}))?/i);
     if (explicit) return { version: this.cleanVersion(explicit[1]), version_code: explicit[2] || explicit[3] || '' };
     return { version: '', version_code: '' };
+  }
+
+  isApkMirrorNoiseChunk(text) {
+    return /\bApps related to\b|\bPopular In Last\b|\bFollow APK Mirror\b|Advertisement/i.test(String(text || ''));
   }
 
   lineBelongsToListing(line, listingSlug) {
