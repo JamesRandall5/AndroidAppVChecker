@@ -136,7 +136,7 @@ The resolver only accepts APKPure results when the page/source has Android TV ev
 The `/check-one` endpoint now accepts `trust_google_play_version`. When true and Google Play exposes a real semantic version, the service can return that Google Play version as the confirmed latest version. Use this only for packages that are known to be Android TV only, because it intentionally bypasses the normal requirement for APKMirror/APKPure Android TV evidence.
 
 
-## 1.4.3
+## 1.4.4
 
 - Fixes APKMirror/Jina reader parsing for Android TV app pages where the readable text contains a title/version such as `(Android TV) 10.12.5000` but does not repeat the APKMirror URL slug beside it.
 - Adds same-app APKMirror variant-page fallbacks for Android TV app-listing URLs, so pages like Tubi can still resolve when the main listing is 403 or too thin via Jina.

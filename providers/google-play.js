@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.3';
+const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.4';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -152,6 +152,7 @@ class AndroidTvVersionProvider {
       { method: 'direct-source-url', url: sourceUrl, confidence: 0.99, kind: 'html', timeout: 6000 },
       { method: 'jina-reader-source-url', url: `https://r.jina.ai/${sourceUrl}`, confidence: 0.97, kind: 'reader', timeout: 12000 },
       ...this.sameAppApkMirrorVariantTargets(normalised),
+      ...this.sameAppJinaSearchTargets(normalised, meta),
     ];
     const out = [];
 
@@ -165,6 +166,10 @@ class AndroidTvVersionProvider {
             : 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain,*/*;q=0.8',
           Referer: 'https://www.google.com/',
         }, target.timeout);
+        if (this.looksLikeBlockedSecurityPage(text)) {
+          out.push(this.candidate({ source: 'apkmirror-source-url', url: target.url, error: `${target.method}: fetched APKMirror security verification page; no release rows available` }));
+          continue;
+        }
         const parsed = this.extractTvCandidates(text, normalised, target, meta);
         if (parsed.length) out.push(...parsed);
         else out.push(this.candidate({ source: 'apkmirror-source-url', url: target.url, error: `${target.method}: fetched but no Android TV release row/link parsed` }));
@@ -375,6 +380,34 @@ class AndroidTvVersionProvider {
         { method: `jina-reader-same-app-variant-${index + 1}`, url: `https://r.jina.ai/${url}`, confidence: Math.max(0.88, confidence - 0.02), kind: 'reader', timeout: 12000 },
       ];
     });
+  }
+
+
+  sameAppJinaSearchTargets(normalised, meta = {}) {
+    // When APKMirror blocks direct/reader access with its bot verification page,
+    // the exact rows can still be visible in public search indexes. Keep this
+    // tightly scoped to the supplied APKMirror developer/app slug and require
+    // Android TV evidence before accepting any version.
+    if (!normalised || normalised.source_type !== 'apkmirror') return [];
+    if (!normalised.developer_slug || !normalised.app_slug) return [];
+    if (!normalised.source_has_tv_hint || this.isFireTvContext(normalised.source_url)) return [];
+    if (!(normalised.kind === 'app' || normalised.kind === 'release' || normalised.kind === 'variant')) return [];
+
+    const title = this.searchSafeTitle(meta.title || normalised.app_slug.replace(/-/g, ' '));
+    const scopedPath = `site:apkmirror.com/apk/${normalised.developer_slug}/${normalised.app_slug}`;
+    const query = [scopedPath, title ? `"${title}"` : '', '"Android TV"', 'APKMirror'].filter(Boolean).join(' ');
+    const url = `https://s.jina.ai/?q=${encodeURIComponent(query)}`;
+    return [
+      { method: 'jina-search-same-app-android-tv', url, confidence: 0.86, kind: 'search', timeout: 15000 },
+    ];
+  }
+
+  searchSafeTitle(value) {
+    return String(value || '')
+      .replace(/["<>]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 90);
   }
 
   extractReleaseUrls(text, normalised) {
@@ -627,6 +660,12 @@ class AndroidTvVersionProvider {
     const explicit = text.match(/\bVersion\s*:?\s*([0-9]+(?:\.[0-9]+){1,5}(?:[-_](?:rc|beta|alpha)\d*)?)(?:\s*\((\d{2,})\)|\s+build\s+(\d{2,}))?/i);
     if (explicit) return { version: this.cleanVersion(explicit[1]), version_code: explicit[2] || explicit[3] || '' };
     return { version: '', version_code: '' };
+  }
+
+
+  looksLikeBlockedSecurityPage(text) {
+    const source = String(text || '');
+    return /Just a moment\.\.\.|Performing security verification|Target URL returned error 403|requiring CAPTCHA|checks? if the site connection is secure|Cloudflare/i.test(source);
   }
 
   isApkMirrorNoiseChunk(text) {
