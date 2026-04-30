@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.16';
+const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.17';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -15,6 +15,8 @@ class AndroidTvVersionProvider {
     // Keep source fetches bounded so a single app can return diagnostics quickly.
     this.timeoutMs = Math.max(5000, Math.min(Number(timeoutMs || 12000), 12000));
     this.gplayModule = null;
+    this.hostLastFetchAt = new Map();
+    this.hostBlockedUntil = new Map();
   }
 
   async loadScraper() {
@@ -155,6 +157,7 @@ class AndroidTvVersionProvider {
     // we may also fetch same-app variant filter pages because they often expose the release rows.
     const sourceUrl = normalised.source_url;
     const out = [];
+    let jina429Seen = false;
 
     const exactSourceCandidate = this.candidateFromExactApkMirrorSourceUrl(normalised);
     if (exactSourceCandidate) out.push(exactSourceCandidate);
@@ -168,6 +171,10 @@ class AndroidTvVersionProvider {
     ];
 
     for (const target of targets) {
+      if (jina429Seen && this.hostFromUrl(target.url) === 'r.jina.ai') {
+        out.push(this.candidate({ source: target.source || 'apkmirror-source-url', url: target.url, error: `${target.method}: skipped after Jina HTTP 429 rate limit in this check` }));
+        continue;
+      }
       // Public search fallbacks are only needed until one confirmed Android TV
       // version is found. This avoids extra slow/block-prone requests and keeps
       // existing direct APKMirror/APKPure behaviour unchanged for apps that work.
@@ -191,6 +198,10 @@ class AndroidTvVersionProvider {
         if (parsed.length) out.push(...parsed);
         else out.push(this.candidate({ source: target.source || 'apkmirror-source-url', url: target.url, error: `${target.method}: fetched but no Android TV release row/link parsed` }));
       } catch (error) {
+        if (this.hostFromUrl(target.url) === 'r.jina.ai' && /HTTP\s+429/i.test(String(error.message || ''))) {
+          jina429Seen = true;
+          this.blockHostTemporarily('r.jina.ai', 9000);
+        }
         out.push(this.candidate({ source: target.source || 'apkmirror-source-url', url: target.url, error: `${target.method}: ${error.message || 'fetch failed'}` }));
       }
     }
@@ -1361,6 +1372,10 @@ class AndroidTvVersionProvider {
     const slug = String(appSlug || '').toLowerCase();
     if (slug && rest.startsWith(`${slug}-`)) rest = rest.slice(slug.length + 1);
     rest = rest.replace(/-android-apk.*$/, '').replace(/-apk.*$/, '').replace(/-release$/, '');
+    // Some APKMirror slugs append opaque tokens after the version with an underscore,
+    // e.g. bbc-iplayer-android-tv-0-8-0_iyjcie_...-release. Strip those
+    // tokens before matching so 0-8-0 becomes 0.8.0 rather than 0.8.
+    rest = rest.replace(/_.+$/, '');
     const buildMatch = rest.match(/(?:^|-)build-(\d{2,})/i);
     if (buildMatch) rest = rest.slice(0, buildMatch.index);
 
@@ -1519,7 +1534,14 @@ class AndroidTvVersionProvider {
     if (!Number.isFinite(major) || !Number.isFinite(minor)) return false;
     if (major < 1 || major > 5 || minor < 0 || minor > 99) return false;
     const text = String(context || '').toLowerCase();
-    return /\b(rating|ratings|rated|star|stars|review|reviews|vote|votes|score)\b/.test(text);
+    if (/\b(rating|ratings|rated|star|stars|review|reviews|vote|votes|score)\b/.test(text)) return true;
+
+    // APKMirror/Jina reader text can place an app title containing "Android TV" close
+    // to page metadata such as a 4.xx star rating. Do not accept rating-shaped x.xx
+    // values from loose reader text unless the chunk also looks like a release/version
+    // row. Strong release-link candidates are handled separately and are unaffected.
+    const releaseLike = /\b(version|release|apk\s+download|download\s+apk|uploaded|what'?s\s+new|variants?)\b/i.test(text);
+    return !releaseLike;
   }
 
   async safeAdd(candidates, notes, label, fn) {
@@ -1535,20 +1557,75 @@ class AndroidTvVersionProvider {
   }
 
   async fetchText(url, headers = {}, timeoutOverrideMs = null) {
-    const controller = new AbortController();
     const timeout = Math.max(3000, Math.min(Number(timeoutOverrideMs || this.timeoutMs), this.timeoutMs));
-    const timer = setTimeout(() => controller.abort(), timeout);
-    try {
-      const response = await fetch(url, { headers, signal: controller.signal, redirect: 'follow' });
-      const text = await response.text();
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return text;
-    } catch (error) {
-      if (error?.name === 'AbortError') throw new Error(`request timed out after ${timeout}ms`);
-      throw error;
-    } finally {
-      clearTimeout(timer);
+    const host = this.hostFromUrl(url);
+    const isJina = host === 'r.jina.ai';
+    const attempts = isJina ? 2 : 1;
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      await this.waitForHostSlot(url);
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeout);
+      try {
+        const response = await fetch(url, { headers, signal: controller.signal, redirect: 'follow' });
+        const text = await response.text();
+        if (response.status === 429 && attempt < attempts) {
+          lastError = new Error(`HTTP 429`);
+          this.blockHostTemporarily(host, 7000);
+          await this.sleep(7000);
+          continue;
+        }
+        if (!response.ok) {
+          if (response.status === 429) this.blockHostTemporarily(host, 9000);
+          throw new Error(`HTTP ${response.status}`);
+        }
+        return text;
+      } catch (error) {
+        if (error?.name === 'AbortError') lastError = new Error(`request timed out after ${timeout}ms`);
+        else lastError = error;
+        if (String(lastError?.message || '').includes('HTTP 429') && attempt < attempts) {
+          this.blockHostTemporarily(host, 7000);
+          await this.sleep(7000);
+          continue;
+        }
+        throw lastError;
+      } finally {
+        clearTimeout(timer);
+      }
     }
+
+    throw lastError || new Error('fetch failed');
+  }
+
+  async waitForHostSlot(url) {
+    const host = this.hostFromUrl(url);
+    if (!host) return;
+    const now = Date.now();
+    const blockedUntil = Number(this.hostBlockedUntil.get(host) || 0);
+    if (blockedUntil > now) await this.sleep(blockedUntil - now);
+
+    // Jina is useful for blocked APKMirror pages, but it rate-limits quickly during
+    // full-list checks. Pace it across requests on this Render instance.
+    const minGap = host === 'r.jina.ai' ? 2200 : 250;
+    const last = Number(this.hostLastFetchAt.get(host) || 0);
+    const wait = Math.max(0, last + minGap - Date.now());
+    if (wait > 0) await this.sleep(wait);
+    this.hostLastFetchAt.set(host, Date.now());
+  }
+
+  blockHostTemporarily(host, ms) {
+    if (!host || !ms) return;
+    this.hostBlockedUntil.set(host, Math.max(Number(this.hostBlockedUntil.get(host) || 0), Date.now() + Number(ms || 0)));
+  }
+
+  hostFromUrl(url) {
+    try { return new URL(String(url || '')).hostname.toLowerCase(); } catch (_) { return ''; }
+  }
+
+  sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, Math.max(0, Number(ms || 0))));
   }
 
   async withTimeout(promise, timeoutMs, message = 'operation timed out') {

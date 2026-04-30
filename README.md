@@ -205,7 +205,7 @@ The APKPure download URL is also supported as a secondary source:
 https://apkpure.com/tai-chi-at-home/io.odeum.learntaichi/download
 ```
 
-## 1.4.16 Apple TV Android TV branch support
+## 1.4.17 Apple TV Android TV branch support
 
 - Added package-specific branch filtering for `com.apple.atve.androidtv.appletv`.
 - Apple TV source pages can expose the mobile `2.x.x` branch alongside the Android TV `1x.x.x` branch.
