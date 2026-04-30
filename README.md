@@ -188,3 +188,19 @@ Render now accepts APKFab version-history URLs such as `https://apkfab.com/tubi-
 Render now accepts Aptoide version-history URLs such as `https://gb-news-gb-news.en.aptoide.com/versions`.
 
 For normal apps, Aptoide remains TV-safe and only confirms a version when the source page is TV-scoped. For GB News (`uk.gbnews.app`), Aptoide does not label the Android TV branch, so the checker uses the same controlled package-specific rule: accept only the first visible `1.x` row and ignore mobile `2.x.x` rows. No 20i/admin GUI change is required.
+
+## 1.4.14 Tai Chi at Home branch support
+
+Adds a controlled package-specific fallback for Tai Chi at Home (`io.odeum.learntaichi`). Aptoide/APKPure list the intended TV-style branch with versions such as `1.5.5` and `1.5.4` alongside unrelated/newer `3.x.x` rows, so the provider accepts only the latest `1.x.x` branch and ignores `3.x.x`.
+
+Recommended source URL:
+
+```
+https://tai-chi-at-home.en.aptoide.com/versions
+```
+
+The APKPure download URL is also supported as a secondary source:
+
+```
+https://apkpure.com/tai-chi-at-home/io.odeum.learntaichi/download
+```

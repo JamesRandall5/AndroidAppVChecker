@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.13';
+const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.14';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -730,6 +730,25 @@ class AndroidTvVersionProvider {
         allowApkMirrorBootstrap: normalised => normalised?.source_type === 'apkmirror' && (normalised.developer_slug === 'tubi-tv' || normalised.source_has_tv_hint),
         pickFirstVisible: false,
       },
+      'io.odeum.learntaichi': {
+        name: 'Tai Chi at Home',
+        titlePattern: /\bTai\s+Chi\s+at\s+Home\b/i,
+        acceptVersion: version => /^1\.[0-9]+\.[0-9]+$/.test(version),
+        branchLabel: '1.x.x',
+        fallbackKind: 'Tai Chi at Home TV branch',
+        evidence: 'Tai Chi at Home-specific package fallback: the source lists the TV-style 1.x.x branch alongside unrelated/newer 3.x.x rows, so the checker accepted only the latest 1.x.x branch version and ignored 3.x.x rows.',
+        urls: [
+          { url: 'https://tai-chi-at-home.en.aptoide.com/versions', method: 'aptoide-taichi-tv-branch-versions', confidence: 0.82, timeout: 5000 },
+          { url: 'https://r.jina.ai/https://tai-chi-at-home.en.aptoide.com/versions', method: 'jina-reader-aptoide-taichi-tv-branch-versions', confidence: 0.81, timeout: 5000 },
+          { url: 'https://apkpure.com/tai-chi-at-home/io.odeum.learntaichi/download', method: 'apkpure-taichi-tv-branch-download', confidence: 0.81, timeout: 4000 },
+          { url: 'https://r.jina.ai/https://apkpure.com/tai-chi-at-home/io.odeum.learntaichi/download', method: 'jina-reader-apkpure-taichi-tv-branch-download', confidence: 0.805, timeout: 4500 },
+          { url: 'https://apkpure.com/tai-chi-at-home/io.odeum.learntaichi/versions', method: 'apkpure-taichi-tv-branch-versions', confidence: 0.80, timeout: 3500 },
+          { url: 'https://apkpure.net/tai-chi-at-home/io.odeum.learntaichi/versions', method: 'apkpure-net-taichi-tv-branch-versions', confidence: 0.79, timeout: 3500 },
+        ],
+        allowApkMirrorBootstrap: () => false,
+        pickFirstVisible: false,
+        allowAptoide: true,
+      },
       'uk.gbnews.app': {
         name: 'GB News',
         titlePattern: /\bGB\s+News\b/i,
@@ -859,6 +878,7 @@ class AndroidTvVersionProvider {
     const encodedVersion = encodeURIComponent(String(version || '').trim());
     if (pkg === 'com.tubitv') return 'https://apkpure.com/tubi-movies-tv-shows-android-app/com.tubitv/download/' + encodedVersion;
     if (pkg === 'uk.gbnews.app') return 'https://apkpure.com/gb-news/uk.gbnews.app/download/' + encodedVersion;
+    if (pkg === 'io.odeum.learntaichi') return 'https://apkpure.com/tai-chi-at-home/io.odeum.learntaichi/download/' + encodedVersion;
     return '';
   }
 
