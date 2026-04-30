@@ -58,3 +58,10 @@ This is a Render-only change. For `com.tubitv`, the service can use APKPure's ve
 ## 1.4.11 APKFab support
 
 Render now accepts APKFab version-history URLs such as `https://apkfab.com/tubi-free-movies-tv-shows/com.tubitv/versions`. For normal apps, APKFab remains TV-safe and only confirms a version when the APKFab source is TV-scoped. For Tubi (`com.tubitv`), APKFab does not label the Android TV branch, so the checker uses a controlled package-specific rule that accepts only `x.y.5xxx` rows and skips newer mobile `x.y.z` rows.
+
+
+## 1.4.13 Aptoide support
+
+Aptoide version-history URLs are now supported, for example `https://gb-news-gb-news.en.aptoide.com/versions`.
+
+General Aptoide usage remains TV-safe. GB News has a controlled package-specific exception that accepts only the first visible `1.x` version row and ignores mobile `2.x.x` rows.

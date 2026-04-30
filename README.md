@@ -181,3 +181,10 @@ Render now accepts APKFab version-history URLs such as `https://apkfab.com/tubi-
 - Because APKPure lists old versions newest-first and legacy versions like `1.12` are numerically higher than the current TV branch `1.8`, the GB News fallback returns the first visible matching `1.x` row rather than sorting all `1.x` rows semantically.
 - Keeps the Tubi/APKFab logic from 1.4.11 unchanged.
 - No 20i/admin GUI change is required.
+
+
+## 1.4.13 Aptoide support
+
+Render now accepts Aptoide version-history URLs such as `https://gb-news-gb-news.en.aptoide.com/versions`.
+
+For normal apps, Aptoide remains TV-safe and only confirms a version when the source page is TV-scoped. For GB News (`uk.gbnews.app`), Aptoide does not label the Android TV branch, so the checker uses the same controlled package-specific rule: accept only the first visible `1.x` row and ignore mobile `2.x.x` rows. No 20i/admin GUI change is required.

@@ -1,9 +1,10 @@
-const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.12';
+const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.13';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
 const APKPURE_HOST_RE = /(^|\.)apkpure\.(?:com|net)$/i;
 const APKFAB_HOST_RE = /(^|\.)apkfab\.com$/i;
+const APTOIDE_HOST_RE = /(^|\.)aptoide\.com$/i;
 const ANDROID_TV_RE = /android[\s-]*tv|\(\s*android\s*tv\s*\)/i;
 const FIRE_TV_RE = /fire[\s-]*tv|amazon\s*fire/i;
 
@@ -104,6 +105,8 @@ class AndroidTvVersionProvider {
       await this.safeAdd(candidates, notes, 'apkpure-tv-url', () => this.lookupApkPureSource(normalised, meta, packageName));
     } else if (normalised.source_type === 'apkfab') {
       await this.safeAdd(candidates, notes, 'apkfab-version-url', () => this.lookupApkFabSource(normalised, meta, packageName));
+    } else if (normalised.source_type === 'aptoide') {
+      await this.safeAdd(candidates, notes, 'aptoide-version-url', () => this.lookupAptoideSource(normalised, meta, packageName));
     } else {
       return this.failure(meta, candidates, notes, 'needs_source_setup', 'Unsupported version source URL.', normalised.source_url || '');
     }
@@ -363,6 +366,137 @@ class AndroidTvVersionProvider {
     return false;
   }
 
+
+  async lookupAptoideSource(normalised, meta = {}, packageName = '') {
+    const sourceUrl = normalised.source_url;
+    const targets = [
+      { method: 'direct-source-url', url: sourceUrl, confidence: 0.84, kind: 'html', timeout: 5000 },
+      { method: 'jina-reader-source-url', url: `https://r.jina.ai/${sourceUrl}`, confidence: 0.82, kind: 'reader', timeout: 5000 },
+    ];
+
+    if (normalised.versions_url && normalised.versions_url !== sourceUrl) {
+      targets.push({ method: 'direct-derived-versions-url', url: normalised.versions_url, confidence: 0.83, kind: 'html', timeout: 5000 });
+      targets.push({ method: 'jina-reader-derived-versions-url', url: `https://r.jina.ai/${normalised.versions_url}`, confidence: 0.81, kind: 'reader', timeout: 5000 });
+    }
+
+    const out = [];
+    for (const target of targets) {
+      try {
+        const text = await this.fetchText(target.url, {
+          'User-Agent': PLAY_UA,
+          'Accept-Language': `${this.language}-${this.country.toUpperCase()},${this.language};q=0.9`,
+          Accept: target.kind === 'reader'
+            ? 'text/plain,*/*;q=0.8'
+            : 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain,*/*;q=0.8',
+          Referer: 'https://www.google.com/',
+        }, target.timeout);
+        const parsed = this.extractAptoideCandidates(text, normalised, target, meta, packageName);
+        if (parsed.length) { out.push(...parsed); return out; }
+        out.push(this.candidate({ source: 'aptoide-version-url', url: target.url, error: `${target.method}: fetched but no usable Aptoide version parsed` }));
+      } catch (error) {
+        out.push(this.candidate({ source: 'aptoide-version-url', url: target.url, error: `${target.method}: ${error.message || 'fetch failed'}` }));
+      }
+    }
+    return out;
+  }
+
+  extractAptoideCandidates(text, normalised, target, meta = {}, packageName = '') {
+    const raw = String(text || '');
+    const plain = this.toPlainText(raw);
+    const compact = plain.replace(/\s+/g, ' ').trim();
+    const out = [];
+    const seen = new Set();
+    const pkg = String(packageName || '').trim().toLowerCase();
+    const sourcePkg = String(normalised.package_from_path || '').trim().toLowerCase();
+    const rule = this.knownPackageBranchRule(pkg);
+
+    if (pkg && sourcePkg && pkg !== sourcePkg) return out;
+
+    const trustedTvPage = Boolean(normalised.source_has_tv_hint || this.aptoideTitleHasTvEvidence(plain, normalised, meta));
+    const packageBranchAllowed = Boolean(rule && rule.allowAptoide !== false && (!rule.titlePattern || rule.titlePattern.test(`${plain} ${normalised.app_slug || ''}`)));
+
+    if (!trustedTvPage && !packageBranchAllowed) return out;
+
+    const lines = plain.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      const match = line.match(/\b([0-9]+(?:\.[0-9]+){1,5}(?:[-+](?:rc|beta|alpha)\d*)?)\b/i);
+      if (!match) continue;
+      const version = this.cleanVersion(match[1]);
+      if (!this.isUsableVersion(version)) continue;
+      const context = [lines[i - 3] || '', lines[i - 2] || '', lines[i - 1] || '', line, lines[i + 1] || '', lines[i + 2] || '', lines[i + 3] || '', lines[i + 4] || '', lines[i + 5] || ''].join(' ');
+      if (this.isFireTvContext(context)) continue;
+
+      let accept = false;
+      let evidence = '';
+      let confidence = target.confidence;
+      if (packageBranchAllowed && rule.acceptVersion(version)) {
+        accept = true;
+        confidence = Math.min(target.confidence, 0.82);
+        evidence = rule.evidence.replace(/APKPure\/APKFab/i, 'APKPure/APKFab/Aptoide');
+      } else if (trustedTvPage && this.isConfirmedAndroidTvContext(`${normalised.source_url} ${context}`)) {
+        accept = true;
+        evidence = `Aptoide source page is TV-scoped and exposes a version-history row (${target.method}).`;
+      }
+      if (!accept) continue;
+
+      const key = `${version}:${target.url}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(this.candidate({
+        source: 'aptoide-version-url',
+        version,
+        version_code: '',
+        updated: this.updatedFromText(context),
+        url: target.url,
+        usable: true,
+        tv_confirmed: true,
+        confidence,
+        tv_evidence: evidence,
+        note: packageBranchAllowed
+          ? `Parsed latest ${rule.fallbackKind} version from Aptoide via ${target.method}; no Android TV text required for this package-specific ${rule.branchLabel} rule.`
+          : `Parsed Aptoide TV-scoped version-history row via ${target.method}.`,
+      }));
+      if (rule?.pickFirstVisible && out.length) return [out[0]];
+    }
+
+    if (packageBranchAllowed) {
+      const versionPattern = /\b([0-9]+(?:\.[0-9]+){1,5}(?:[-+](?:rc|beta|alpha)\d*)?)\b/g;
+      let match;
+      while ((match = versionPattern.exec(compact))) {
+        const version = this.cleanVersion(match[1]);
+        if (!this.isUsableVersion(version) || !rule.acceptVersion(version)) continue;
+        const around = compact.slice(Math.max(0, match.index - 220), match.index + 420);
+        if (this.isFireTvContext(around)) continue;
+        const key = `${version}:${target.url}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(this.candidate({
+          source: 'aptoide-version-url',
+          version,
+          version_code: '',
+          updated: this.updatedFromText(around),
+          url: target.url,
+          usable: true,
+          tv_confirmed: true,
+          confidence: Math.min(target.confidence, 0.82),
+          tv_evidence: rule.evidence.replace(/APKPure\/APKFab/i, 'APKPure/APKFab/Aptoide'),
+          note: `Parsed latest ${rule.fallbackKind} version from flattened Aptoide text via ${target.method}; no Android TV text required for this package-specific ${rule.branchLabel} rule.`,
+        }));
+        if (rule.pickFirstVisible && out.length) return [out[0]];
+      }
+    }
+
+    return this.uniqueBy(out, c => `${c.source}:${c.version}:${c.url}`);
+  }
+
+  aptoideTitleHasTvEvidence(plain, normalised, meta = {}) {
+    const head = String(plain || '').split(/\r?\n/).slice(0, 100).join(' ');
+    if (ANDROID_TV_RE.test(`${normalised.source_url} ${normalised.app_slug || ''}`)) return true;
+    if (ANDROID_TV_RE.test(head) && this.importantTokens(meta.title || normalised.app_slug || '').some(t => head.toLowerCase().includes(t))) return true;
+    return false;
+  }
+
   extractApkPureTvCandidates(text, normalised, target, meta = {}, packageName = '') {
     const raw = String(text || '');
     const plain = this.toPlainText(raw).replace(/\s+/g, ' ').trim();
@@ -602,11 +736,13 @@ class AndroidTvVersionProvider {
         acceptVersion: version => /^1\.[0-9]+$/.test(version),
         branchLabel: '1.x',
         fallbackKind: 'GB News TV branch',
-        evidence: 'GB News-specific APKPure fallback: APKPure does not separate the TV app from the mobile app, so the checker accepted only the 1.x TV-style branch and ignored mobile 2.x.x rows.',
+        evidence: 'GB News-specific package fallback: the source does not separate the TV app from the mobile app, so the checker accepted only the 1.x TV-style branch and ignored mobile 2.x.x rows.',
         urls: [
           { url: 'https://apkpure.com/gb-news/uk.gbnews.app/versions', method: 'apkpure-gbnews-tv-branch-versions', confidence: 0.81, timeout: 3500 },
           { url: 'https://r.jina.ai/https://apkpure.com/gb-news/uk.gbnews.app/versions', method: 'jina-reader-apkpure-gbnews-tv-branch-versions', confidence: 0.805, timeout: 4500 },
           { url: 'https://apkpure.net/gb-news/uk.gbnews.app/versions', method: 'apkpure-net-gbnews-tv-branch-versions', confidence: 0.80, timeout: 3500 },
+          { url: 'https://gb-news-gb-news.en.aptoide.com/versions', method: 'aptoide-gbnews-tv-branch-versions', confidence: 0.82, timeout: 5000 },
+          { url: 'https://r.jina.ai/https://gb-news-gb-news.en.aptoide.com/versions', method: 'jina-reader-aptoide-gbnews-tv-branch-versions', confidence: 0.81, timeout: 5000 },
           { url: 'https://www.bing.com/search?q=' + encodeURIComponent('site:apkpure.com/gb-news/uk.gbnews.app/versions "GB News 1." "MB"') + '&format=rss', method: 'bing-rss-apkpure-gbnews-versions-index', confidence: 0.77, timeout: 3500 },
         ],
         allowApkMirrorBootstrap: () => false,
@@ -614,6 +750,7 @@ class AndroidTvVersionProvider {
         // are numerically higher than the newer TV branch version 1.8, return the first visible
         // matching 1.x row rather than sorting all 1.x rows semantically.
         pickFirstVisible: true,
+        allowAptoide: true,
       },
     };
     return rules[pkg] || null;
@@ -970,7 +1107,41 @@ class AndroidTvVersionProvider {
     if (APKMIRROR_HOST_RE.test(url.hostname)) return this.normaliseApkMirrorSourceUrl(raw);
     if (APKPURE_HOST_RE.test(url.hostname)) return this.normaliseApkPureSourceUrl(raw);
     if (APKFAB_HOST_RE.test(url.hostname)) return this.normaliseApkFabSourceUrl(raw);
-    throw new Error('Version source URL must be on apkmirror.com, apkpure.com, apkpure.net, or apkfab.com.');
+    if (APTOIDE_HOST_RE.test(url.hostname)) return this.normaliseAptoideSourceUrl(raw);
+    throw new Error('Version source URL must be on apkmirror.com, apkpure.com, apkpure.net, apkfab.com, or aptoide.com.');
+  }
+
+
+  normaliseAptoideSourceUrl(input) {
+    const raw = String(input || '').trim();
+    let url;
+    try { url = new URL(raw); } catch (_) { throw new Error('Aptoide source URL is not a valid URL.'); }
+    if (!APTOIDE_HOST_RE.test(url.hostname)) throw new Error('Aptoide source URL must be on aptoide.com.');
+    const sourceUrl = `https://${url.hostname}${url.pathname}${url.search || ''}`;
+    const parts = url.pathname.split('/').filter(Boolean);
+    const packageFromPath = parts.find(part => /^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$/i.test(part)) || '';
+    const hostPrefix = url.hostname.replace(/\.(?:[a-z]{2}\.)?aptoide\.com$/i, '').replace(/\.(?:en|gb|us)$/i, '');
+    const appSlug = (parts[0] && !/^versions$/i.test(parts[0])) ? parts[0] : (hostPrefix || '');
+    let versionsUrl = sourceUrl;
+    if (!/\/versions\/?$/i.test(url.pathname)) {
+      const basePath = parts.length ? '/' + parts.join('/') : '';
+      versionsUrl = `https://${url.hostname}${basePath.replace(/\/$/, '')}/versions`;
+    }
+    return {
+      source_type: 'aptoide',
+      kind: /\/versions\/?$/i.test(url.pathname) ? 'aptoide-versions' : 'aptoide',
+      source_url: sourceUrl,
+      versions_url: versionsUrl,
+      alternate_url: '',
+      developer_slug: '',
+      app_slug: appSlug,
+      release_slug: '',
+      package_from_path: packageFromPath,
+      original_url: raw,
+      is_variant_url: false,
+      is_release_url: false,
+      source_has_tv_hint: /android[-\s]*tv|leanback|google[-\s]*tv|aptoide[-\s]*tv/i.test(`${sourceUrl} ${appSlug}`),
+    };
   }
 
   normaliseApkFabSourceUrl(input) {
@@ -1486,7 +1657,7 @@ class AndroidTvVersionProvider {
 
   sourceDebug(candidates, normalised) {
     const versionsSeen = (candidates || [])
-      .filter(c => (c.source === 'apkmirror-source-url' || c.source === 'apkpure-tv-url' || c.source === 'apkpure-package-versions-fallback' || c.source === 'apkfab-version-url') && c.version)
+      .filter(c => (c.source === 'apkmirror-source-url' || c.source === 'apkpure-tv-url' || c.source === 'apkpure-package-versions-fallback' || c.source === 'apkfab-version-url' || c.source === 'aptoide-version-url') && c.version)
       .map(c => ({ version: c.version, url: c.url, tv: c.tv_confirmed, note: c.note }))
       .slice(0, 20);
     return {

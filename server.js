@@ -6,7 +6,7 @@ const sharedSecret = String(process.env.CHECKER_SHARED_SECRET || '').trim();
 const gplayCountry = String(process.env.GPLAY_COUNTRY || 'gb').trim();
 const gplayLanguage = String(process.env.GPLAY_LANGUAGE || 'en').trim();
 const requestTimeoutMs = Number(process.env.REQUEST_TIMEOUT_MS || 30000);
-const buildVersion = 'android-tv-production-version-source-safe-1.4.12';
+const buildVersion = 'android-tv-production-version-source-safe-1.4.13';
 
 if (!sharedSecret) {
   console.error('CHECKER_SHARED_SECRET is required');
