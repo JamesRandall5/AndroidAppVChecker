@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.15';
+const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.16';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -618,6 +618,7 @@ class AndroidTvVersionProvider {
 
       const info = this.versionFromAndroidTvLine(chunk);
       if (!this.isUsableVersion(info.version)) continue;
+      if (this.isLikelyRatingVersion(info.version, chunk)) continue;
       const key = `${info.version}:${info.version_code || ''}:${target.url}:line`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -997,6 +998,7 @@ class AndroidTvVersionProvider {
       if (!this.textScopeAllowsChunk(chunk, normalised, meta)) continue;
       const info = this.versionFromAndroidTvLine(chunk);
       if (!this.isUsableVersion(info.version)) continue;
+      if (this.isLikelyRatingVersion(info.version, chunk)) continue;
       const key = `text:${info.version}:${info.version_code || ''}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -1478,15 +1480,46 @@ class AndroidTvVersionProvider {
       // the final selection while leaving all other apps on the existing TV-evidence logic.
       .filter(c => !rule || rule.acceptVersion(c.version))
       .sort((a, b) => {
+        // Prefer higher-quality evidence before comparing version numbers. A reader-text
+        // fallback can occasionally pick up page metadata such as ratings (for example
+        // 4.68) from a Jina/APKMirror page. Proper APKMirror release links/rows carry
+        // higher confidence, so they should win over lower-confidence loose text matches.
+        const qualityCompare = this.candidateQualityScore(b) - this.candidateQualityScore(a);
+        if (qualityCompare !== 0) return qualityCompare;
+        const confidenceCompare = Number(b.confidence || 0) - Number(a.confidence || 0);
+        if (Math.abs(confidenceCompare) > 0.001) return confidenceCompare;
         const versionCompare = this.compareVersions(b.version, a.version);
         if (versionCompare !== 0) return versionCompare;
         const buildCompare = Number(b.version_code || 0) - Number(a.version_code || 0);
         if (buildCompare !== 0) return buildCompare;
-        const confidenceCompare = Number(b.confidence || 0) - Number(a.confidence || 0);
-        if (Math.abs(confidenceCompare) > 0.001) return confidenceCompare;
         return 0;
       });
     return usable[0] || null;
+  }
+
+  candidateQualityScore(candidate = {}) {
+    const note = String(candidate.note || '').toLowerCase();
+    const evidence = String(candidate.tv_evidence || '').toLowerCase();
+    const source = String(candidate.source || '').toLowerCase();
+
+    if (source === 'google-play-scraper') return 90;
+    if (note.includes('exact apkmirror android tv release url') || evidence.includes('exact android tv release')) return 88;
+    if (note.includes('release link') || evidence.includes('release url/title')) return 82;
+    if (note.includes('version-history row') || note.includes('branch') || evidence.includes('branch')) return 72;
+    if (evidence.includes('tv-scoped')) return 68;
+    if (note.includes('reader text') || evidence.includes('reader text line')) return 45;
+    if (note.includes('search text') || evidence.includes('search result title/snippet')) return 42;
+    return Math.round(Number(candidate.confidence || 0) * 50);
+  }
+
+  isLikelyRatingVersion(version = '', context = '') {
+    const parts = String(version || '').split('.').map(v => Number.parseInt(v, 10));
+    if (parts.length !== 2) return false;
+    const [major, minor] = parts;
+    if (!Number.isFinite(major) || !Number.isFinite(minor)) return false;
+    if (major < 1 || major > 5 || minor < 0 || minor > 99) return false;
+    const text = String(context || '').toLowerCase();
+    return /\b(rating|ratings|rated|star|stars|review|reviews|vote|votes|score)\b/.test(text);
   }
 
   async safeAdd(candidates, notes, label, fn) {
