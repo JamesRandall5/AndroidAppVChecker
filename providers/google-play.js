@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.14';
+const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.15';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -69,7 +69,7 @@ class AndroidTvVersionProvider {
     try {
       normalised = this.normaliseVersionSourceUrl(versionSourceUrl || apkMirrorTvUrl);
     } catch (error) {
-      const playWinner = this.pickBestTvCandidate(candidates);
+      const playWinner = this.pickBestTvCandidate(candidates, packageName);
       if (playWinner && playWinner.source === 'google-play-scraper') {
         return {
           ok: true,
@@ -111,7 +111,7 @@ class AndroidTvVersionProvider {
       return this.failure(meta, candidates, notes, 'needs_source_setup', 'Unsupported version source URL.', normalised.source_url || '');
     }
 
-    const winner = this.pickBestTvCandidate(candidates);
+    const winner = this.pickBestTvCandidate(candidates, packageName);
     if (winner) {
       return {
         ok: true,
@@ -749,6 +749,25 @@ class AndroidTvVersionProvider {
         pickFirstVisible: false,
         allowAptoide: true,
       },
+      'com.apple.atve.androidtv.appletv': {
+        name: 'Apple TV',
+        titlePattern: /\bApple\s+TV\b/i,
+        acceptVersion: version => /^1[0-9]\.[0-9]+\.[0-9]+$/.test(version),
+        branchLabel: '1x.x.x',
+        fallbackKind: 'Apple TV Android TV branch',
+        evidence: 'Apple TV-specific package fallback: Apple mobile and Android TV builds can appear under related app names, so the checker accepted only the 1x.x.x Android TV branch and ignored mobile 2.x.x rows.',
+        urls: [
+          { url: 'https://apkpure.com/apple-tv/com.apple.atve.androidtv.appletv/versions', method: 'apkpure-apple-tv-androidtv-branch-versions', confidence: 0.82, timeout: 3500 },
+          { url: 'https://r.jina.ai/https://apkpure.com/apple-tv/com.apple.atve.androidtv.appletv/versions', method: 'jina-reader-apkpure-apple-tv-androidtv-branch-versions', confidence: 0.815, timeout: 4500 },
+          { url: 'https://apkpure.com/apple-tv/com.apple.atve.androidtv.appletv/download', method: 'apkpure-apple-tv-androidtv-branch-download', confidence: 0.81, timeout: 3500 },
+          { url: 'https://r.jina.ai/https://apkpure.com/apple-tv/com.apple.atve.androidtv.appletv/download', method: 'jina-reader-apkpure-apple-tv-androidtv-branch-download', confidence: 0.805, timeout: 4500 },
+          { url: 'https://www.apkmirror.com/apk/apple/apple-tv-android-tv-2/', method: 'apkmirror-apple-tv-androidtv-branch-listing', confidence: 0.80, timeout: 3500 },
+          { url: 'https://r.jina.ai/https://www.apkmirror.com/apk/apple/apple-tv-android-tv-2/', method: 'jina-reader-apkmirror-apple-tv-androidtv-branch-listing', confidence: 0.795, timeout: 4500 },
+        ],
+        allowApkMirrorBootstrap: normalised => normalised?.source_type === 'apkmirror' && normalised.developer_slug === 'apple',
+        pickFirstVisible: false,
+        allowAptoide: true,
+      },
       'uk.gbnews.app': {
         name: 'GB News',
         titlePattern: /\bGB\s+News\b/i,
@@ -879,6 +898,7 @@ class AndroidTvVersionProvider {
     if (pkg === 'com.tubitv') return 'https://apkpure.com/tubi-movies-tv-shows-android-app/com.tubitv/download/' + encodedVersion;
     if (pkg === 'uk.gbnews.app') return 'https://apkpure.com/gb-news/uk.gbnews.app/download/' + encodedVersion;
     if (pkg === 'io.odeum.learntaichi') return 'https://apkpure.com/tai-chi-at-home/io.odeum.learntaichi/download/' + encodedVersion;
+    if (pkg === 'com.apple.atve.androidtv.appletv') return 'https://apkpure.com/apple-tv/com.apple.atve.androidtv.appletv/download/' + encodedVersion;
     return '';
   }
 
@@ -1448,9 +1468,15 @@ class AndroidTvVersionProvider {
     return (candidates || []).some(c => c && c.usable && c.tv_confirmed && this.isUsableVersion(c.version) && !this.isFireTvContext(c.url));
   }
 
-  pickBestTvCandidate(candidates) {
+  pickBestTvCandidate(candidates, packageName = '') {
+    const rule = this.knownPackageBranchRule(packageName);
     const usable = candidates
       .filter(c => c && c.usable && c.tv_confirmed && this.isUsableVersion(c.version) && !this.isFireTvContext(c.url))
+      // For known split mobile/TV package histories, do not allow a confirmed-looking
+      // mobile branch to win just because a provider/source also exposes it. This keeps
+      // Apple TV 2.x.x, GB News 2.x.x, Tai Chi 3.x.x and Tubi generic x.y.z rows out of
+      // the final selection while leaving all other apps on the existing TV-evidence logic.
+      .filter(c => !rule || rule.acceptVersion(c.version))
       .sort((a, b) => {
         const versionCompare = this.compareVersions(b.version, a.version);
         if (versionCompare !== 0) return versionCompare;
