@@ -173,3 +173,11 @@ The `/check-one` endpoint now accepts `trust_google_play_version`. When true and
 ## 1.4.11 APKFab support
 
 Render now accepts APKFab version-history URLs such as `https://apkfab.com/tubi-free-movies-tv-shows/com.tubitv/versions`. For normal apps, APKFab remains TV-safe and only confirms a version when the APKFab source is TV-scoped. For Tubi (`com.tubitv`), APKFab does not label the Android TV branch, so the checker uses a controlled package-specific rule that accepts only `x.y.5xxx` rows and skips newer mobile `x.y.z` rows.
+
+
+## 1.4.12 notes
+
+- Adds a controlled APKPure branch fallback for GB News (`uk.gbnews.app`). APKPure lists the TV and mobile app versions together without an Android TV label, so the provider accepts only the `1.x` branch and ignores mobile `2.x.x` rows.
+- Because APKPure lists old versions newest-first and legacy versions like `1.12` are numerically higher than the current TV branch `1.8`, the GB News fallback returns the first visible matching `1.x` row rather than sorting all `1.x` rows semantically.
+- Keeps the Tubi/APKFab logic from 1.4.11 unchanged.
+- No 20i/admin GUI change is required.
