@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.17';
+const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.18';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -1378,6 +1378,16 @@ class AndroidTvVersionProvider {
     rest = rest.replace(/_.+$/, '');
     const buildMatch = rest.match(/(?:^|-)build-(\d{2,})/i);
     if (buildMatch) rest = rest.slice(0, buildMatch.index);
+
+    // APKMirror slugs sometimes append an internal app/build branch directly after
+    // the app version, e.g. Prime Video:
+    //   prime-video-android-tv-6-23-22v15-4-0-1009-armv7a-release
+    // The public app version is 6.23.22. The old generic parser stopped at 6.23
+    // because the next token was "22v15" rather than a plain hyphen-separated number.
+    const embeddedBuildMatch = rest.match(/(?:^|-)(\d+(?:-\d+){1,5})v\d+(?=$|-)/i);
+    if (embeddedBuildMatch) {
+      return { version: this.hyphenVersionToDotted(embeddedBuildMatch[1]), version_code: buildMatch?.[1] || '' };
+    }
 
     // APKMirror slugs often end with a release date, e.g. 26-6-0rc5-2026-04-21.
     // Pick the first real semantic version after the app slug, not the trailing date.
