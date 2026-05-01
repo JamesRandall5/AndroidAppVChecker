@@ -1,4 +1,4 @@
-const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.18';
+const PROVIDER_BUILD = 'google-play-provider-production-version-source-tv-safe-1.4.19';
 
 const PLAY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const APKMIRROR_HOST_RE = /(^|\.)apkmirror\.com$/i;
@@ -248,14 +248,14 @@ class AndroidTvVersionProvider {
   async lookupApkFabSource(normalised, meta = {}, packageName = '') {
     const sourceUrl = normalised.source_url;
     const targets = [
-      { method: 'direct-source-url', url: sourceUrl, confidence: 0.86, kind: 'html', timeout: 5000 },
-      { method: 'jina-reader-source-url', url: `https://r.jina.ai/${sourceUrl}`, confidence: 0.84, kind: 'reader', timeout: 5000 },
+      { method: 'direct-source-url', url: sourceUrl, confidence: 0.86, kind: 'html', timeout: 12000 },
+      { method: 'jina-reader-source-url', url: `https://r.jina.ai/${sourceUrl}`, confidence: 0.84, kind: 'reader', timeout: 12000 },
     ];
 
     // If the user supplies the normal APKFab app URL, try the matching /versions page too.
     if (normalised.versions_url && normalised.versions_url !== sourceUrl) {
-      targets.push({ method: 'direct-derived-versions-url', url: normalised.versions_url, confidence: 0.85, kind: 'html', timeout: 5000 });
-      targets.push({ method: 'jina-reader-derived-versions-url', url: `https://r.jina.ai/${normalised.versions_url}`, confidence: 0.83, kind: 'reader', timeout: 5000 });
+      targets.push({ method: 'direct-derived-versions-url', url: normalised.versions_url, confidence: 0.85, kind: 'html', timeout: 12000 });
+      targets.push({ method: 'jina-reader-derived-versions-url', url: `https://r.jina.ai/${normalised.versions_url}`, confidence: 0.83, kind: 'reader', timeout: 12000 });
     }
 
     const out = [];
@@ -761,6 +761,26 @@ class AndroidTvVersionProvider {
         pickFirstVisible: false,
         allowAptoide: true,
       },
+      'com.onepeloton.callisto': {
+        name: 'Peloton',
+        titlePattern: /\bPeloton\b/i,
+        acceptVersion: version => /^3\.[0-9]+\.[0-9]+$/.test(version),
+        branchLabel: '3.x.x',
+        fallbackKind: 'Peloton TV-compatible branch',
+        evidence: 'Peloton-specific package fallback: APKPure does not label this page as Android TV, but the source is scoped to com.onepeloton.callisto and the checker accepts only the current 3.x.x branch while rejecting older 2.x/mobile-style rows.',
+        urls: [
+          { url: 'https://apkpure.com/peloton-fitness-workouts/com.onepeloton.callisto/download', method: 'apkpure-peloton-current-download', confidence: 0.82, timeout: 7000 },
+          { url: 'https://r.jina.ai/https://apkpure.com/peloton-fitness-workouts/com.onepeloton.callisto/download', method: 'jina-reader-apkpure-peloton-current-download', confidence: 0.815, timeout: 9000 },
+          { url: 'https://apkpure.com/peloton-fitness-workouts/com.onepeloton.callisto/versions', method: 'apkpure-peloton-versions', confidence: 0.81, timeout: 7000 },
+          { url: 'https://r.jina.ai/https://apkpure.com/peloton-fitness-workouts/com.onepeloton.callisto/versions', method: 'jina-reader-apkpure-peloton-versions', confidence: 0.805, timeout: 9000 },
+          { url: 'https://apkpure.net/peloton-fitness-workouts/com.onepeloton.callisto/download', method: 'apkpure-net-peloton-current-download', confidence: 0.80, timeout: 7000 },
+          { url: 'https://r.jina.ai/https://apkpure.net/peloton-fitness-workouts/com.onepeloton.callisto/download', method: 'jina-reader-apkpure-net-peloton-current-download', confidence: 0.795, timeout: 9000 },
+          { url: 'https://www.bing.com/search?q=' + encodeURIComponent('site:apkpure.com/peloton-fitness-workouts/com.onepeloton.callisto/download "Peloton" "Latest Version" "3."') + '&format=rss', method: 'bing-rss-apkpure-peloton-download-index', confidence: 0.77, timeout: 5000 },
+        ],
+        allowApkMirrorBootstrap: () => false,
+        pickFirstVisible: false,
+        allowAptoide: false,
+      },
       'com.apple.atve.androidtv.appletv': {
         name: 'Apple TV',
         titlePattern: /\bApple\s+TV\b/i,
@@ -859,7 +879,8 @@ class AndroidTvVersionProvider {
 
     const raw = String(text || '');
     const plain = this.toPlainText(raw).replace(/\s+/g, ' ').trim();
-    if (rule.titlePattern && !rule.titlePattern.test(plain)) return [];
+    const combinedScopeText = `${plain} ${target.url || ''} ${normalised.source_url || ''}`;
+    if (rule.titlePattern && !rule.titlePattern.test(combinedScopeText)) return [];
 
     const out = [];
     const seen = new Set();
@@ -867,10 +888,13 @@ class AndroidTvVersionProvider {
     const versionPattern = '([0-9]+(?:\\.[0-9]+){1,5}(?:[-+](?:rc|beta|alpha)\\d*)?)';
     const patterns = [
       // Normal APKPure versions page/search snippets: "GB News 1.8 14.4 MB Feb 4, 2026".
-      new RegExp(`${escapedName}[^0-9]{0,120}${versionPattern}(?:\\s+([0-9]+(?:\\.[0-9]+)?\\s*MB))?(?:\\s+([A-Za-z]{3,9}\\s+\\d{1,2},\\s+20\\d{2}))?`, 'gi'),
+      new RegExp(`${escapedName}[^0-9]{0,160}${versionPattern}(?:\\s+([0-9]+(?:\\.[0-9]+)?\\s*MB))?(?:\\s+([A-Za-z]{3,9}\\s+\\d{1,2},\\s+20\\d{2}))?`, 'gi'),
+      // APKPure current download pages: "Latest Version 3.68.0" / "What's New in the Latest Version 3.68.0".
+      new RegExp(`(?:Latest\\s+Version|Latest\\s+version|What'?s\\s+New\\s+in\\s+the\\s+Latest\\s+Version|Download\\s+the\\s+latest\\s+version\\s+of\\s+${escapedName})[^0-9]{0,180}${versionPattern}(?:[^A-Za-z0-9]{0,80}([A-Za-z]{3,9}\\s+\\d{1,2},\\s+20\\d{2}))?`, 'gi'),
       // Flattened tables can show just version, size, date once the app title has been established.
       /\b([0-9]+(?:\.[0-9]+){1,5}(?:[-+](?:rc|beta|alpha)\d*)?)\b\s*,?\s*([0-9]+(?:\.[0-9]+)?\s*MB)?\s*,?\s*([A-Za-z]{3,9}\s+\d{1,2},\s+20\d{2})?/gi,
     ];
+
 
     for (const pattern of patterns) {
       let match;
@@ -911,6 +935,7 @@ class AndroidTvVersionProvider {
     if (pkg === 'uk.gbnews.app') return 'https://apkpure.com/gb-news/uk.gbnews.app/download/' + encodedVersion;
     if (pkg === 'io.odeum.learntaichi') return 'https://apkpure.com/tai-chi-at-home/io.odeum.learntaichi/download/' + encodedVersion;
     if (pkg === 'com.apple.atve.androidtv.appletv') return 'https://apkpure.com/apple-tv/com.apple.atve.androidtv.appletv/download/' + encodedVersion;
+    if (pkg === 'com.onepeloton.callisto') return 'https://apkpure.com/peloton-fitness-workouts/com.onepeloton.callisto/download/' + encodedVersion;
     return '';
   }
 
